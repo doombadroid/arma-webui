@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Armapunk web UI</title>
+<style>
+  :root{
+    --bg:#0b0e13; --panel:#141a22; --line:#22303d;
+    --ink:#dfe8f0; --dim:#7f93a6; --accent:#38e1c4; --acid:#c9e21a;
+    --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:400 clamp(12px,1.15vw,16px)/1.5 system-ui,sans-serif;
+    display:flex; align-items:center; justify-content:center; padding:2vh 2vw;
+  }
+  .card{
+    width:min(760px,94vw); background:var(--panel);
+    border:1px solid var(--line); border-radius:14px; padding:clamp(14px,2.2vw,26px);
+    box-shadow:0 18px 50px #0008;
+  }
+  h1{margin:0 0 .15em; font-size:clamp(17px,2.1vw,24px); letter-spacing:.4px}
+  h1 span{color:var(--accent)}
+  p.sub{margin:0 0 1.3em; color:var(--dim); font-size:.88em}
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:.7em}
+  .tile{background:#0e141b; border:1px solid var(--line); border-radius:10px; padding:.8em 1em}
+  .k{color:var(--dim); font-size:.72em; text-transform:uppercase; letter-spacing:.08em}
+  .v{font-family:var(--mono); font-size:1.05em; margin-top:.25em; word-break:break-all}
+  .v.big{font-size:1.5em; color:var(--acid)}
+  .pill{
+    float:right; font-size:.72em; padding:.25em .7em; border-radius:99px;
+    border:1px solid var(--line); color:var(--dim);
+  }
+  .pill.live{color:var(--accent); border-color:var(--accent)}
+  .bar{height:6px; background:#0a0d12; border-radius:99px; overflow:hidden; margin-top:.5em}
+  .bar i{display:block; height:100%; background:var(--accent); width:0; transition:width .4s ease}
+  footer{margin-top:1.2em; color:var(--dim); font-size:.75em; line-height:1.6}
+</style>
+<script>
+/* Self-boot: pull webui.js out of the PBO rather than waiting for SQF to
+   inject it. A <script src> cannot work here — no resolvable base URL. */
+window.WEBUIReady = new Promise(function (r) { window.__webuiReady = r; });
+if (typeof A3API !== "undefined" && A3API.RequestFile) {
+  A3API.RequestFile("ui\\html\\webui.js").then(function (src) { (0, eval)(src); })
+    .catch(function (e) { console.error("self-load failed", e); });
+}
+</script>
+</head>
+<body>
+<div class="card">
+  <span class="pill" id="state">waiting for SQF…</span>
+  <h1>Armapunk <span>web UI</span></h1>
+  <p class="sub">Two-way bridge. SQF pushes state, the page calls back — CSS does the layout, so resize the control and it reflows.</p>
+
+  <div class="grid">
+    <div class="tile"><div class="k">Player</div><div class="v" id="pname">—</div></div>
+    <div class="tile"><div class="k">UID</div><div class="v" id="puid">—</div></div>
+    <div class="tile"><div class="k">Side</div><div class="v" id="pside">—</div></div>
+    <div class="tile"><div class="k">Resolution</div><div class="v" id="res">—</div></div>
+    <div class="tile"><div class="k">FPS</div><div class="v big" id="fps">—</div>
+      <div class="bar"><i id="fpsbar"></i></div></div>
+    <div class="tile"><div class="k">Pushes received</div><div class="v big" id="ticks">0</div></div>
+  </div>
+
+  <div class="grid" style="margin-top:.8em">
+    <button onclick="t('ping')">call ping</button>
+    <button onclick="t('playerInfo')">call playerInfo</button>
+    <button onclick="t('serverTime')">call serverTime</button>
+    <button onclick="t('nope')">blocked call</button>
+    <button onclick="burst()">burst x20</button>
+  </div>
+  <div class="tile" style="margin-top:.8em">
+    <div class="k">Keyboard probe — click a field, type, then read the counters</div>
+    <input id="kbin" placeholder="&lt;input&gt; — type here…"
+           style="width:100%;margin-top:.5em;padding:.6em .8em;font:inherit;
+                  background:#0a0d12;color:var(--ink);border:1px solid var(--line);
+                  border-radius:8px;outline:none">
+    <div id="kbce" contenteditable="true"
+         style="width:100%;margin-top:.5em;padding:.6em .8em;min-height:2.2em;
+                background:#0a0d12;color:var(--ink);border:1px dashed var(--line);
+                border-radius:8px;outline:none">contenteditable — type here too…</div>
+    <div class="v" id="kbout"  style="margin-top:.5em">input.value: (empty)</div>
+    <div class="v" id="kbce2"  style="margin-top:.25em">contenteditable.textContent: (unchanged)</div>
+    <div class="v" id="kbstat" style="color:var(--dim);font-size:.85em;white-space:pre-wrap"></div>
+    <div class="v" id="kbpoll" style="color:var(--dim);font-size:.85em">poll: no value change seen yet</div>
+    <div class="grid" style="margin-top:.5em">
+      <button onclick="kbReset()">reset counters</button>
+      <button onclick="kbReport()">send report to RPT</button>
+    </div>
+  </div>
+
+  <div class="tile" style="margin-top:.8em">
+    <div class="k">Native prompt (the supported way to get typed text)</div>
+    <div id="fakefield" onclick="doPrompt()"
+         style="margin-top:.5em;padding:.6em .8em;border:1px solid var(--line);
+                border-radius:8px;background:#0a0d12;cursor:pointer;color:var(--dim);user-select:none">
+      tap to type…</div>
+    <div class="v" id="promptout" style="margin-top:.5em">result: (none yet)</div>
+  </div>
+
+  <div class="tile" style="margin-top:.8em">
+    <div class="k">v2 bridge — the four directions and the game filesystem</div>
+    <div class="grid" style="margin-top:.5em">
+      <button onclick="t('ping')">JS &rarr; SQF call</button>
+      <button onclick="askDemo()">JS &rarr; SQF bool (ask)</button>
+      <button onclick="t('callPage')">SQF &rarr; JS call</button>
+      <button onclick="texDemo()">RequestTexture (.paa)</button>
+      <button onclick="t('freeze')">StopBrowser 3s</button>
+    </div>
+    <div class="v" id="capout" style="margin-top:.5em">—</div>
+    <img id="tex" style="margin-top:.5em;max-height:96px;display:none">
+  </div>
+
+  <div class="tile" style="margin-top:.8em"><div class="k">Call log</div>
+    <div class="v" id="callog" style="white-space:pre-wrap;max-height:22vh;overflow:auto">—</div></div>
+
+  <footer>
+    Push: SQF <code>webui_fnc_push</code> → <code>WEBUI.on()</code>.
+    Call: page <code>WEBUI.call()</code> → <code>A3API.SendAlert</code> → SQF <code>JSDialog</code>.
+    Both need the page served from a whitelisted path AND a JSDialog handler attached —
+    each fails silently on its own.
+  </footer>
+</div>
+
+<script>
+/* webui.js is injected by webui_fnc_init over ExecJS — no <script src>, since
+   a page can be handed to Chromium without a resolvable base URL. WEBUI therefore
+   appears shortly after this script runs, so poll for it. WEBUI.on() replays the
+   last value per channel, so nothing pushed before we subscribe is lost. */
+function el(id){ return document.getElementById(id); }
+
+async function doPrompt(){
+  var out = el('promptout'), fake = el('fakefield');
+  if(!window.WEBUI){ out.textContent = 'result: no bridge yet'; return; }
+  out.textContent = 'result: waiting for the native overlay…';
+  try{
+    var v = await WEBUI.call('promptText', ['Enter some text', '', 24], 60000);
+    if (v === null || v === undefined || v === ''){
+      out.textContent = 'result: (cancelled or empty)';
+    } else {
+      out.textContent = 'result: ' + JSON.stringify(v);
+      fake.textContent = v; fake.style.color = 'var(--ink)';
+    }
+  }catch(e){ out.textContent = 'result: !! ' + e.message; }
+}
+
+/* --- v2 demos ----------------------------------------------------------- */
+async function askDemo(){
+  var o = el('capout');
+  try { var v = await WEBUI.ask('isCop', []); o.textContent = 'WEBUI.ask("isCop") -> ' + v + '   (one round trip, no ExecJS leg)'; }
+  catch(e){ o.textContent = 'ask failed: ' + e.message; }
+}
+/* Probes every candidate path so one run settles which form RequestTexture
+   accepts. A failed lookup RESOLVES with a ~23 char stub, it does not reject,
+   so length is the only signal. */
+async function texDemo(){
+  var o = el('capout'), img = el('tex');
+  var root = (window.WEBUI && WEBUI.missionRoot) || '(none)';
+  var cases = [
+    ['mission-relative', 'icons\\myicon.paa'],
+    ['mission root + rel', (WEBUI.missionRoot || '') + 'icons\\myicon.paa'],
+    ['a3 addon path', 'a3\\weapons_f\\rifles\\mx\\data\\ui\\gear_mx_rifle_x_ca.paa'],
+    ['WEBUI.texture()', null]
+  ];
+  var out = ['missionRoot = ' + root];
+  for (var i = 0; i < cases.length; i++){
+    var label = cases[i][0], path = cases[i][1];
+    try {
+      var url = path === null ? await WEBUI.texture('icons\\myicon.paa', 256)
+                              : await A3API.RequestTexture(path, 256);
+      var okay = typeof url === 'string' && url.length > 128;
+      out.push(label + ': ' + (okay ? 'OK ' : 'FAIL ') + (url || '').length + ' chars  ' +
+               JSON.stringify(String(url).slice(0, 40)));
+      if (okay && !img.src){ img.src = url; img.style.display = 'block'; }
+    } catch(e){ out.push(label + ': threw ' + e.message); }
+  }
+  o.textContent = out.join('\n');
+  o.style.whiteSpace = 'pre-wrap';
+  WEBUI.call('log', ['TEXTURE PROBE\n' + out.join('\n')]).catch(function(){});
+}
+
+
+/* --- keyboard probe (REAL this time) -------------------------------------
+   The previous version of this tile printed "keydown: 0 - input events: 0" as
+   STATIC TEXT with no listeners attached, so it could never have shown anything
+   else -- and it was nonetheless cited as evidence that typed text never
+   reaches the DOM. Everything below actually counts.
+
+   Three independent ways of noticing input, because they can fail separately:
+   events, a polled read of .value (in case the field updates without events),
+   and document.activeElement (in case focus never lands at all). */
+var KB = { keydown:0, keyup:0, keypress:0, beforeinput:0, input:0, composition:0,
+           ceInput:0, lastKey:"", pollSeen:false };
+
+function kbStat(){
+  var a = document.activeElement;
+  el('kbstat').textContent =
+    "keydown " + KB.keydown + "  keyup " + KB.keyup + "  keypress " + KB.keypress +
+    "  beforeinput " + KB.beforeinput + "  input " + KB.input +
+    "  composition " + KB.composition + "  ce-input " + KB.ceInput +
+    "\nlastKey: " + (KB.lastKey || "(none)") +
+    "\nactiveElement: " + (a ? (a.id || a.tagName) : "(null)") +
+    "   hasFocus(doc): " + document.hasFocus();
+}
+function kbReset(){
+  KB = { keydown:0, keyup:0, keypress:0, beforeinput:0, input:0, composition:0,
+         ceInput:0, lastKey:"", pollSeen:false };
+  el('kbin').value = ""; el('kbce').textContent = "contenteditable — type here too…";
+  el('kbout').textContent = "input.value: (empty)";
+  el('kbce2').textContent = "contenteditable.textContent: (unchanged)";
+  el('kbpoll').textContent = "poll: no value change seen yet";
+  kbStat();
+}
+(function wireKb(){
+  var i = el('kbin'), c = el('kbce');
+  [["keydown","keydown"],["keyup","keyup"],["keypress","keypress"]].forEach(function(p){
+    i.addEventListener(p[0], function(e){ KB[p[1]]++; if(e.key) KB.lastKey = e.key; kbStat(); });
+  });
+  i.addEventListener("beforeinput", function(){ KB.beforeinput++; kbStat(); });
+  i.addEventListener("input", function(){
+    KB.input++; el('kbout').textContent = "input.value: " + JSON.stringify(i.value); kbStat();
+  });
+  i.addEventListener("compositionstart", function(){ KB.composition++; kbStat(); });
+  c.addEventListener("input", function(){
+    KB.ceInput++; el('kbce2').textContent = "contenteditable.textContent: " + JSON.stringify(c.textContent); kbStat();
+  });
+  // document-level, in case the field never receives them but the page does
+  document.addEventListener("keydown", function(e){
+    if (e.target !== i) { KB.keydown++; KB.lastKey = e.key + " (doc)"; kbStat(); }
+  });
+  // polled read: catches a field that fills without ever firing an event
+  var lastV = "", lastC = c.textContent;
+  setInterval(function(){
+    if (i.value !== lastV){
+      lastV = i.value; KB.pollSeen = true;
+      el('kbpoll').textContent = "poll: input.value changed to " + JSON.stringify(lastV);
+    }
+    if (c.textContent !== lastC){
+      lastC = c.textContent; KB.pollSeen = true;
+      el('kbpoll').textContent = "poll: contenteditable changed to " + JSON.stringify(lastC);
+    }
+  }, 250);
+  kbStat();
+})();
+function kbReport(){
+  var i = el('kbin'), c = el('kbce'), a = document.activeElement;
+  var r = "KEYBOARD PROBE (Arma " + (navigator.userAgent||"") + ")" +
+    "\n  events: keydown=" + KB.keydown + " keyup=" + KB.keyup + " keypress=" + KB.keypress +
+    " beforeinput=" + KB.beforeinput + " input=" + KB.input + " composition=" + KB.composition +
+    " ceInput=" + KB.ceInput +
+    "\n  lastKey=" + JSON.stringify(KB.lastKey) +
+    "\n  input.value=" + JSON.stringify(i.value) + " (len " + i.value.length + ")" +
+    "\n  contenteditable=" + JSON.stringify(c.textContent) +
+    "\n  activeElement=" + (a ? (a.id || a.tagName) : "null") + " docHasFocus=" + document.hasFocus() +
+    "\n  pollSawChange=" + KB.pollSeen;
+  el('kbstat').textContent = r;
+  if (window.WEBUI) WEBUI.call('log', [r]).catch(function(){});
+}
+
+function clog(m){ var e=el('callog'); if(e.textContent==='—')e.textContent=''; e.textContent+=m+'\n'; e.scrollTop=e.scrollHeight; }
+async function t(name){
+  if(!window.WEBUI){ clog('no WEBUI yet'); return; }
+  var t0=performance.now();
+  try{ var r=await WEBUI.call(name); clog(name+' -> '+JSON.stringify(r)+'  ('+(performance.now()-t0).toFixed(1)+'ms)'); }
+  catch(e){ clog(name+' !! '+e.message+'  ('+(performance.now()-t0).toFixed(1)+'ms)'); }
+}
+async function burst(){
+  if(!window.WEBUI){ clog('no WEBUI yet'); return; }
+  var t0=performance.now();
+  try{ await Promise.all(Array.from({length:20},function(_,i){return WEBUI.call('ping',['b'+i]);}));
+       clog('burst 20 ok  ('+(performance.now()-t0).toFixed(1)+'ms total)'); }
+  catch(e){ clog('burst failed: '+e.message); }
+}
+
+(function wait(n){
+  if (window.WEBUI){
+    const p = el('state'); p.textContent = 'bridge live (4-way)'; p.className = 'pill live';
+
+    /* Exposed to SQF for webui_fnc_bench: what viewport does the page
+       ACTUALLY get? "fixed 1200x600 regardless of resolution" was inferred
+       from a single sample and needs a second data point. */
+    WEBUI.handle('metrics', function () {
+      return {
+        innerW: window.innerWidth, innerH: window.innerHeight,
+        outerW: window.outerWidth, outerH: window.outerHeight,
+        dpr: window.devicePixelRatio,
+        screenW: screen.width, screenH: screen.height,
+        docW: document.documentElement.clientWidth,
+        docH: document.documentElement.clientHeight,
+        rootFontPx: getComputedStyle(document.documentElement).fontSize
+      };
+    });
+
+    /* Exposed to SQF: [_ctrl, "pageState", ["hi"]] call webui_fnc_call. */
+    WEBUI.handle('pageState', function (tag) {
+      el('capout').textContent = 'SQF called into the page with ' + JSON.stringify(tag);
+      return { scrolled: window.scrollY, logLines: el('callog').textContent.split('\n').length, tag: tag || null };
+    });
+    WEBUI.call('ping',['boot']).then(function(r){ clog('auto ping -> '+JSON.stringify(r)); })
+                            .catch(function(e){ clog('auto ping !! '+e.message); });
+
+    WEBUI.on('player', function (v){
+      if (!Array.isArray(v)) return;
+      el('pname').textContent = v[0]; el('puid').textContent = v[1]; el('pside').textContent = v[2];
+    });
+
+    WEBUI.on('screen', function (v){
+      if (Array.isArray(v)) el('res').textContent = v[0] + ' × ' + v[1];
+    });
+
+    WEBUI.on('tick', function (v){
+      if (!Array.isArray(v)) return;
+      el('ticks').textContent = v[0];
+      el('fps').textContent   = v[1];
+      el('fpsbar').style.width = Math.max(0, Math.min(100, (v[1] / 120) * 100)) + '%';
+    });
+    return;
+  }
+  if (n > 100){ el('state').textContent = 'no bridge'; return; }
+  setTimeout(function(){ wait(n + 1); }, 100);
+})(0);
+</script>
+</body>
+</html>
