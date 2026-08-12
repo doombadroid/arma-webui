@@ -25,12 +25,20 @@ systemChat "draw rate: idle 5s, hands off";
 systemChat ">>> MOVE THE MOUSE over the page for 5s <<<";
 [_ctrl, "mouse moving over the page", 5] call webui_fnc_countDraws;
 
-// A GIF or a JS mutation both force content change without touching rAF, which
-// separates "frames are only delivered when something changes" from "frames are
-// not delivered at all".
-[_ctrl, "animLoad", [true], 6] call webui_fnc_call;
-systemChat "draw rate: JS mutating a style every 16ms, hands off";
+// Forcing content change without touching rAF separates "frames are delivered
+// only when something changes" from "frames are not delivered at all". Injected
+// rather than called, so this works on any page without its cooperation.
+_ctrl ctrlWebBrowserAction ["ExecJS",
+    "(function(){ if (window.__webuiAnim) clearInterval(window.__webuiAnim);"
+  + " var i = 0, b = document.body;"
+  + " b.style.outlineStyle = 'solid'; b.style.outlineWidth = '1px';"
+  + " window.__webuiAnim = setInterval(function(){"
+  + "   i = (i + 1) % 360; b.style.outlineColor = 'hsl(' + i + ',90%,50%)';"
+  + " }, 16); })();"];
+systemChat "draw rate: a style is mutating every 16ms, hands off";
 [_ctrl, "JS style mutation @60Hz", 5] call webui_fnc_countDraws;
-[_ctrl, "animLoad", [false], 6] call webui_fnc_call;
+_ctrl ctrlWebBrowserAction ["ExecJS",
+    "if (window.__webuiAnim) { clearInterval(window.__webuiAnim);"
+  + " window.__webuiAnim = null; document.body.style.outlineStyle = 'none'; }"];
 
 diag_log "[WEBUI-DRAW] done";
