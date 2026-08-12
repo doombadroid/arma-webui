@@ -179,7 +179,17 @@ _ctrl ctrlAddEventHandler ["JSDialog", {
                         _ok = false; _res = str _exception;
                         diag_log format ["[WEBUI] handler threw on seq %1: %2", _seq, _exception];
                     };
-                    [_control, _seq, _ok, _res] call _respond;
+                    // A handler that returns nothing does not leave _res holding
+                    // nil -- SQF DELETES the variable, so the array literal below
+                    // would throw "Undefined variable in expression: _res" before
+                    // _respond ever got the chance to encode a null. This is the
+                    // normal path, not an edge case: webui_fnc_prompt returns nil
+                    // on every cancel.
+                    if (isNil "_res") then {
+                        [_control, _seq, _ok, nil] call _respond;
+                    } else {
+                        [_control, _seq, _ok, _res] call _respond;
+                    };
                 };
             };
         };

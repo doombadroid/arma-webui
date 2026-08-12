@@ -73,6 +73,12 @@ class WebUI_PromptOk {
     colorText[]           = {0.03,0.06,0.05,1};
     colorBackground[]     = {0.788,0.886,0.10,1};
     colorFocused[]        = {0.85,0.95,0.15,1};
+    // CT_BUTTON REQUIRES this one. Leaving it out does not degrade the button --
+    // the engine refuses to build the whole control class, so the dialog loads
+    // without controls 937410-937415 and webui_fnc_prompt then finds a null edit
+    // box and returns nil. The visible symptom is a "No entry ...
+    // colorBackgroundActive" box on dialog open and a broken prompt afterwards.
+    colorBackgroundActive[]   = {0.85,0.95,0.15,1};
     colorBackgroundDisabled[] = {0.3,0.3,0.3,1};
     colorDisabled[]       = {0.5,0.5,0.5,1};
     colorShadow[]         = {0,0,0,0};
