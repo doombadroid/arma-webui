@@ -2,9 +2,21 @@
 /*
     arma-webui -- CfgFunctions fragment.
 
-    #include this inside your mission's CfgFunctions. The tag "webui" gives you
-    webui_fnc_init, webui_fnc_push and so on. Adjust `file =` if you put the
-    library somewhere other than <mission>\webui\.
+    #include this inside your mission's CfgFunctions, at the TOP LEVEL -- as a
+    sibling of your own tag classes, not inside one:
+
+        class CfgFunctions {
+            class MyTag { tag = "my"; class stuff { file = "..."; }; };
+            #include "webui\config\CfgFunctions.hpp"      // <- here
+        };
+
+    Nested inside another tag, "webui" becomes a category and core/diagnostics
+    become functions whose `file` is a directory. The engine then spams
+    "Script webui\functions not found" and no webui_fnc_* exists. Missions whose
+    CfgFunctions body lives in an included file make this easy to get wrong,
+    because the enclosing class is in a different file.
+
+    Adjust `file =` if the library is not at <mission>\webui\.
 */
 class webui {
     class core {
