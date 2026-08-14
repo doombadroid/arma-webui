@@ -66,7 +66,7 @@ private _stats = {
 private _logRow = {
     params ["_leg", "_size", "_side", "_n", "_s"];
     diag_log format ["[WEBUI-LAT] leg=%1 size=%2 side=%3 n=%4 min=%5ms med=%6ms max=%7ms",
-        _leg, _size, _side, _n,
+        _leg, _size toFixed 0, _side, _n,
         (_s select 0) toFixed 1, (_s select 1) toFixed 1, (_s select 2) toFixed 1];
 };
 private _payload = {

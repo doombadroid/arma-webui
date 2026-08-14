@@ -25,7 +25,7 @@ delivered on load rather than dropped.
 [_ctrl, "playerInfo", { [name player, getPlayerUID player] }] call webui_fnc_on;
 ```
 ```js
-const info = await WEBUI.call("playerInfo");   // latency: run webui_fnc_latencyProbe
+const info = await WEBUI.call("playerInfo");   // ~21 ms median at 1 KB (FINDINGS 5)
 ```
 
 Handlers are registered per control, so one page cannot reach another's verbs.
@@ -40,11 +40,17 @@ WEBUI.handle("selectedRow", () => state.selected);  // may return a Promise
 private _row = [_ctrl, "selectedRow"] call webui_fnc_call;   // needs a scheduled context
 ```
 
+Costs ~2 ms over the raw transport (~14 ms median round trip at 1 KB —
+FINDINGS 5). **The page's reply must stay small**: the engine truncates the
+page → SQF message channel (cap measured in FINDINGS 5; comfortably above
+1 K characters, dead by 64 K), and a truncated reply looks like a timeout.
+Big data belongs in the other direction — SQF → page carries 4 MB intact.
+
 ## page -> SQF, boolean, one round trip
 
 ```js
-const isCop = await WEBUI.ask("isCop");   // bool only; no ExecJS reply leg -- the
-                                          // probe's page-ask row checks the cost
+const isCop = await WEBUI.ask("isCop");   // bool only; no ExecJS reply leg --
+                                          // ~14.5 ms median, ~0.7x call() (FINDINGS 5)
 ```
 
 The handler's return value *is* the answer, so it runs unscheduled and must not

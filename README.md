@@ -112,6 +112,7 @@ library rather than scaffolding:
 | `webui_fnc_forceProbe` | can any engine-side lever force repaints? |
 | `webui_fnc_focusProbe` | does window focus feed the clamp? |
 | `webui_fnc_latencyProbe` | what does a message cost, per leg, on both clocks? |
+| `webui_fnc_msgCapProbe` | bisect the page → SQF truncation cap to the character |
 
 The library also runs one check on its own: **`webui_fnc_clampCheck`**, once
 per session on the first ready page, detects the clamped-delivery world from

@@ -41,5 +41,6 @@ class webui {
         class paintProbe {};    // GIF / overlay: who is throttling the paint?
         class focusProbe {};    // does window focus feed the frame clamp?
         class latencyProbe {};  // per-leg bridge latency, both clocks, payload ladder
+        class msgCapProbe {};   // bisect the page->SQF message truncation cap
     };
 };

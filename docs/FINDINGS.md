@@ -102,12 +102,57 @@ median / max over 20+ iterations:
 | `page-call` | page → SQF → page | `performance.now()` | what API.md quotes; the SQF reply rides ExecJS, so the big rungs load the same path the old 618/701 ms claim measured |
 | `page-ask` | page → SQF | `performance.now()` | bool-only, no ExecJS reply leg; checks the "roughly half of call()" claim |
 
-Measured on this client:
+Measured 2026-08-14, healthy client (clamp verdict `healthy`, forced rate
+53.7 fps), Steam launch, in-mission on a ~200-entity server:
 
-<!-- RUN [] spawn webui_fnc_latencyProbe AND PASTE THE [WEBUI-LAT] ROWS HERE -->
+```
+[WEBUI-LAT] leg=execjs-echo size=1024    side=sqf-event n=20 min=7.8ms  med=11.7ms max=13.7ms
+[WEBUI-LAT] leg=execjs-echo size=65536   side=sqf-event n=20 min=7.8ms  med=11.7ms max=13.7ms
+[WEBUI-LAT] leg=execjs-echo size=524288  side=sqf-event n=20 min=9.8ms  med=11.7ms max=27.3ms
+[WEBUI-LAT] leg=execjs-echo size=4194304 side=sqf-event n=20 min=60.5ms med=68.4ms max=91.8ms
+[WEBUI-LAT] leg=fnc-call    size=1024    side=sqf-poll  n=20 min=11.7ms med=13.7ms max=15.6ms
+[WEBUI-LAT] leg=fnc-call    size=65536   FAIL (timeout)   ← see below: NOT latency, TRUNCATION
+[WEBUI-LAT] leg=fnc-call    size=524288  FAIL (timeout)
+[WEBUI-LAT] leg=fnc-call    size=4194304 FAIL (timeout)
+[WEBUI-LAT] leg=page-call   size=1024    side=page      n=20 min=14.7ms med=21.0ms max=23.9ms
+[WEBUI-LAT] leg=page-call   size=65536   side=page      n=20 min=14.8ms med=17.5ms max=44.2ms
+[WEBUI-LAT] leg=page-call   size=524288  side=page      n=20 min=33.6ms med=46.3ms max=91.0ms
+[WEBUI-LAT] leg=page-call   size=4194304 side=page      n=20 min=219.3ms med=280.5ms max=365.6ms
+[WEBUI-LAT] leg=page-ask    size=0       side=page      n=20 min=10.8ms med=14.5ms max=34.2ms
+```
 
-What *was* verified by the original ladder and still stands until the probe
-says otherwise: every rung from 1 KB to 3.8 MB **arrived intact** — the probe
+What the numbers settle:
+
+- **The transport is ~12 ms round trip and flat to 512 KB.** `execjs-echo`
+  medians are identical at 1 KB, 64 KB and 512 KB — fixed cost dominates;
+  bytes only start to matter by 4 MB (~68 ms). The historical
+  `618 ms at 1 KB / 701 ms at 3.8 MB` is **not reproduced** — nothing in any
+  leg approaches it (worst 4 MB median anywhere: 280 ms). Whatever produced
+  it — an earlier engine build, a loaded frame schedule, or measurement
+  through a sleeping poll — it is not a property of the current bridge.
+- **The polling-wait hypothesis above is answered: ~2 ms, not hundreds.**
+  `fnc-call` minus `execjs-echo` at 1 KB = 13.7 − 11.7 ms. `webui_fnc_call`
+  costs essentially the transport.
+- **API.md's old `~15-21 ms` was real** — it matches `page-call` at 1 KB
+  (median 21.0 ms). The two "contradictory" numbers were different legs, as
+  §5 suspected; both docs now say which leg they mean.
+- **`ask` is ~0.7× `call`** (14.5 vs 21.0 ms median), not the "roughly half"
+  API.md used to claim. Right idea, wrong constant — corrected there.
+- **`fnc-call` ≥ 64 KB does not fail for latency reasons at all.** The RPT
+  shows the page's reply arriving as `["REPLY",21,true,"xxx…` — valid JSON
+  **cut off mid-string**: the engine truncates the JSDialog message
+  (page → SQF direction) at a cap somewhere between ~1 K chars (a ~1044-char
+  reply passed 20/20) and 64 K (0/20). The reverse direction has no such
+  limit — `execjs-echo` carried 4 MB in this same session, and `page-call`'s
+  big rungs returned through ExecJS intact. **Design rule: big payloads flow
+  SQF → page freely; page → SQF messages must stay under the cap or be
+  chunked.** Exact cap: run `webui_fnc_msgCapProbe` (bisects both the
+  SendAlert and SendConfirm carriers to the character):
+
+<!-- RUN [] spawn webui_fnc_msgCapProbe AND PASTE THE [WEBUI-CAP] VERDICT ROWS HERE -->
+
+What *was* verified by the original ladder and still stands: every rung from
+1 KB to 3.8 MB **arrived intact in the SQF → page direction** — the probe
 re-verifies this by failing a rung loudly rather than assuming it. Shipping an
 asset from the server to a page at runtime therefore remains viable:
 remoteExec the bytes, push them in as a data URI, no client repack.
