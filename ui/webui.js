@@ -29,6 +29,13 @@
 (function () {
   "use strict";
 
+  // The engine truncates every page -> SQF message (SendAlert and SendConfirm
+  // alike) at exactly 10240 characters, envelope included -- measured to the
+  // character by webui_fnc_msgCapProbe, FINDINGS 5. A message over the cap
+  // arrives as broken JSON and presents as a TIMEOUT with no cause, so both
+  // senders below refuse to send one and name the real problem instead.
+  var MSG_CAP = 10240;
+
   // Two boot paths and SQF re-injects on every load. Without this guard a
   // second run replaces WEBUI and silently drops every WEBUI.on() handler:
   // calls keep working, pushes stop, nothing errors.
@@ -81,7 +88,13 @@
         }, timeout || DEFAULT_TIMEOUT);
         pending.set(id, { resolve: resolve, reject: reject, timer: timer, name: name });
         try {
-          A3API.SendAlert(JSON.stringify(["CALL", id, String(name), args]));
+          var msg = JSON.stringify(["CALL", id, String(name), args]);
+          if (msg.length > MSG_CAP) {
+            throw new Error("call('" + name + "') message is " + msg.length +
+              " chars; the engine truncates page -> SQF at " + MSG_CAP +
+              " (FINDINGS 5) -- send less, or pull the data SQF -> page");
+          }
+          A3API.SendAlert(msg);
         } catch (e) {
           clearTimeout(timer);
           pending.delete(id);
@@ -91,12 +104,18 @@
     },
 
     /* Resolved by the SQF handler's return value, so there is no ExecJS leg:
-       about half the latency of call(), but bool only. */
+       ~0.7x the latency of call() (measured, FINDINGS 5), but bool only. */
     ask: function (name, args) {
       if (!haveAPI() || !A3API.SendConfirm) {
         return Promise.reject(new Error("A3API.SendConfirm unavailable"));
       }
-      return A3API.SendConfirm(JSON.stringify(["ASK", String(name), args || []]));
+      var msg = JSON.stringify(["ASK", String(name), args || []]);
+      if (msg.length > MSG_CAP) {
+        return Promise.reject(new Error(
+          "ask('" + name + "') message is " + msg.length +
+          " chars; the engine truncates page -> SQF at " + MSG_CAP + " (FINDINGS 5)"));
+      }
+      return A3API.SendConfirm(msg);
     },
 
     /** Subscribe to a push channel. Replays the last value if one arrived early. */
@@ -187,7 +206,14 @@
     _invoke: function (id, name, b64args) {
       var reply = function (ok, value) {
         try {
-          A3API.SendAlert(JSON.stringify(["REPLY", id, !!ok, ok ? value : String(value)]));
+          var msg = JSON.stringify(["REPLY", id, !!ok, ok ? value : String(value)]);
+          if (msg.length > MSG_CAP) {
+            msg = JSON.stringify(["REPLY", id, false,
+              "handler '" + name + "' returned " + msg.length +
+              " chars; the engine truncates page -> SQF at " + MSG_CAP +
+              " (FINDINGS 5) -- return less, or push it SQF -> page"]);
+          }
+          A3API.SendAlert(msg);
         } catch (e) { console.error("WEBUI._invoke reply failed", e); }
       };
       var fn = exposed.get(String(name));
