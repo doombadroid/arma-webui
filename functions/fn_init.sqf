@@ -112,6 +112,11 @@ private _markReady = {
         { _c ctrlWebBrowserAction ["ExecJS", _x]; } forEach _q;
         diag_log format ["[WEBUI] drained %1 queued ExecJS", count _q];
     };
+    // once per session, off the readiness path so it costs the first paint
+    // nothing: is this client's frame delivery clamped? (FINDINGS section 1 --
+    // launch path). Caches, opt-out flag, and the mission-visible hook all
+    // live in fn_clampCheck; calling it twice is free by design.
+    [_c] call webui_fnc_clampCheck;
 };
 _ctrl setVariable ["webui_markReady", _markReady];
 

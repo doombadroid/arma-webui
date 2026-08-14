@@ -78,17 +78,42 @@ a single control and generalising will tell you.
 It matters: a `1rem = width / 75` scheme gives 16px on a 40x20 box and 7.6px on
 a 19x9 panel.
 
-## 5. ExecJS carries at least 3.8 MB
+## 5. Latency, per leg — and a superseded number
 
-Every rung from 1,000 to 4,000,000 characters arrived intact, and cost barely
-moved — 618 ms at 1 KB against 701 ms at 3.8 MB, nearly all of which is round
-trip rather than payload. No ceiling was found.
+This section previously reported a lone figure — `618 ms at 1 KB against
+701 ms at 3.8 MB` for ExecJS — while API.md simultaneously quoted
+`WEBUI.call` at `~15-21 ms`. Those cannot both be true: `call()` *contains*
+an ExecJS leg. Neither number had a probe behind it, and the most likely
+resolution is that they measured different things — one the transport, the
+other the transport **plus a scheduled-SQF polling wait**, whose granularity
+belongs to the SQF scheduler, not the bridge. Both old numbers are
+**superseded** by `webui_fnc_latencyProbe`, which measures each leg
+separately, on both clocks, and prints the poll-vs-event difference as its
+own row so that mistake cannot be made silently again.
 
-So shipping an asset from the server to a page at runtime is viable: remoteExec
-the bytes, push them in as a data URI, no client repack.
+The probe reports, per payload rung (1 KB / 64 KB / 512 KB / 4 MB), min /
+median / max over 20+ iterations:
 
-`Deflate` manages 329:1 and 381:1 on repetitive text, useful for the network leg
-even though ExecJS plainly does not need it.
+| leg | direction | clock | what it includes |
+|---|---|---|---|
+| `execjs-echo` | SQF → page → SQF | `diag_tickTime`, event-stamped | transport only — the reply stamp is written inside the JSDialog event handler, no polling |
+| `execjs-oneway` | SQF → page | derived | a **bound** (≤ echo min) plus echo/2 explicitly labelled "symmetry assumed" — the two clocks share no epoch, so a one-way figure cannot be measured directly |
+| `fnc-call` | SQF → page → SQF | `diag_tickTime`, poll return | what `webui_fnc_call` really costs, its polling wait included; minus `execjs-echo` at the same size = scheduler + reply-path overhead |
+| `page-call` | page → SQF → page | `performance.now()` | what API.md quotes; the SQF reply rides ExecJS, so the big rungs load the same path the old 618/701 ms claim measured |
+| `page-ask` | page → SQF | `performance.now()` | bool-only, no ExecJS reply leg; checks the "roughly half of call()" claim |
+
+Measured on this client:
+
+<!-- RUN [] spawn webui_fnc_latencyProbe AND PASTE THE [WEBUI-LAT] ROWS HERE -->
+
+What *was* verified by the original ladder and still stands until the probe
+says otherwise: every rung from 1 KB to 3.8 MB **arrived intact** — the probe
+re-verifies this by failing a rung loudly rather than assuming it. Shipping an
+asset from the server to a page at runtime therefore remains viable:
+remoteExec the bytes, push them in as a data URI, no client repack.
+
+`Deflate` manages 329:1 and 381:1 on repetitive text, useful for the network
+leg even though ExecJS plainly does not need it.
 
 ## 6. RequestTexture searches the GAME filesystem
 

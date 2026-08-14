@@ -8,9 +8,14 @@
     ENGINE side, not in the page. This tries every one available.
 
       1. baseline
-      2. ctrlSetFocus on the browser control -- the page reports hasFocus=false,
-         and an offscreen browser that is not told it has focus is a plausible
-         reason for the host to stop asking it for frames
+      2. ctrlSetFocus on the browser control. document.hasFocus() read false
+         when this was written -- ON THE CLAMPED CLIENT, like every number in
+         this file. It is NOT evidence that input fails: typed text reaches
+         the DOM normally (FINDINGS section 2, keyboard verified in game). How
+         the control acquires keyboard focus is not recorded anywhere in this
+         repo; what is established is that it does, and that hasFocus() is not
+         a reliable witness. Here the lever is tried only for its possible
+         effect on frame delivery.
       3. an EachFrame no-op ctrlCommit -- re-committing a control's own position
          is the cheapest way to mark it dirty every frame
       4. an EachFrame displayUpdate on the hosting display -- this is the

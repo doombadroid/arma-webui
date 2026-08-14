@@ -25,7 +25,7 @@ delivered on load rather than dropped.
 [_ctrl, "playerInfo", { [name player, getPlayerUID player] }] call webui_fnc_on;
 ```
 ```js
-const info = await WEBUI.call("playerInfo");        // ~15-21 ms
+const info = await WEBUI.call("playerInfo");   // latency: run webui_fnc_latencyProbe
 ```
 
 Handlers are registered per control, so one page cannot reach another's verbs.
@@ -43,7 +43,8 @@ private _row = [_ctrl, "selectedRow"] call webui_fnc_call;   // needs a schedule
 ## page -> SQF, boolean, one round trip
 
 ```js
-const isCop = await WEBUI.ask("isCop");   // ~half the latency of call(); bool only
+const isCop = await WEBUI.ask("isCop");   // bool only; no ExecJS reply leg -- the
+                                          // probe's page-ask row checks the cost
 ```
 
 The handler's return value *is* the answer, so it runs unscheduled and must not
@@ -91,6 +92,26 @@ WEBUI.on("vol", v => { gain.gain.value = userVolume * v.music * v.dist; });
 ```
 
 Frees the browser's memory. Not a frame-rate optimisation — see FINDINGS.
+
+## Launch-clamp detection
+
+```sqf
+// automatic: fn_init arms it on the first ready page, once per session
+missionNamespace setVariable ["webui_onClampVerdict", {
+    params ["_verdict", "_fps"];
+    if (_verdict isEqualTo "clamped") then {
+        systemChat "web UI is frame-clamped -- launch the game through Steam";
+    };
+}];
+// opt out entirely (set BEFORE the first webui_fnc_init):
+missionNamespace setVariable ["webui_clampCheckDisabled", true];
+```
+
+Detects the FINDINGS §1 world — launched outside Steam, delivery clamped to
+~1 fps — by forcing a brief style mutation and sampling the draw rate; an idle
+sample cannot distinguish clamped from healthy. Results land in
+`webui_clampVerdict` (`"healthy"|"clamped"`) and `webui_clampFps`. The library
+never presents anything itself.
 
 ## Security
 

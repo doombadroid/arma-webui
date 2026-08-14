@@ -111,6 +111,17 @@ library rather than scaffolding:
 | `webui_fnc_paintProbe` | if it is not painting, which layer is throttling? |
 | `webui_fnc_forceProbe` | can any engine-side lever force repaints? |
 | `webui_fnc_focusProbe` | does window focus feed the clamp? |
+| `webui_fnc_latencyProbe` | what does a message cost, per leg, on both clocks? |
+
+The library also runs one check on its own: **`webui_fnc_clampCheck`**, once
+per session on the first ready page, detects the clamped-delivery world from
+FINDINGS §1 — the player who launched outside Steam and sees every web screen
+at ~1 fps. It forces a short 60 Hz style mutation (an idle sample cannot tell
+clamped from healthy, because idle is ~0.6 fps on a healthy client too),
+samples the draw rate, and files `webui_clampVerdict` / `webui_clampFps` in
+`missionNamespace` plus a `[WEBUI-CLAMP]` RPT line. It presents nothing:
+set `webui_onClampVerdict` (code, called with `[verdict, fps]`) to decide what
+the player sees, or set `webui_clampCheckDisabled` before init to opt out.
 
 Pages also report uncaught errors and unhandled rejections to the RPT
 automatically. A JavaScript error kills a page silently and looks exactly like a

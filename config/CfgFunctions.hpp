@@ -29,6 +29,7 @@ class webui {
         class freeze {};        // StopBrowser / ResumeBrowser
         class prompt {};        // native text entry overlay
         class volumeSlave {};   // make page audio obey the game's volume sliders
+        class clampCheck {};    // once per session: is frame delivery clamped? (FINDINGS 1)
     };
     class diagnostics {
         file = "webui\diagnostics";
@@ -39,5 +40,6 @@ class webui {
         class forceProbe {};    // every engine-side lever for forcing repaints
         class paintProbe {};    // GIF / overlay: who is throttling the paint?
         class focusProbe {};    // does window focus feed the frame clamp?
+        class latencyProbe {};  // per-leg bridge latency, both clocks, payload ladder
     };
 };
