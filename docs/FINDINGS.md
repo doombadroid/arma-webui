@@ -218,3 +218,45 @@ so `<audio src="http://...">` is blocked exactly like `fetch`.
   URL cache to bust; a rebuilt page is picked up on the next open.
 - **`OpenDevConsole` needs the `-debug` start parameter**, and silently does
   nothing without it.
+
+## 9. Serving pages from the server, and what blocks it
+
+A page has to load from a path in `allowedHTMLLoadURIs`, which means the mission
+PBO, which means shipping one line of HTML costs every connected client a full
+mission re-download. `webui_fnc_serve` works around that: the PBO page still
+loads and renders, and the server then overrides its markup in place. If the
+server is silent the PBO page stands, so the fallback is the absence of a reply
+rather than a code path that has to run.
+
+Three things were measured on a dedicated Linux server (Arma 2.22.154020,
+2026-08-18) while building it:
+
+- **`ctrlWebBrowserAction "Deflate"` works server-side, with no display and no
+  browser control.** The BIKI says it works with `controlNull`; it was not
+  obvious that held on a headless dedicated server with no CEF anywhere, and it
+  does. A round trip through `Deflate` then `Inflate` returned the input exactly.
+  This matters because the server->client hop is the only size-constrained leg in
+  the chain, and real pages deflate about 3.6x (a 218 KB page to 59 KB).
+  `Inflate` caps its OUTPUT at 1 MB, so pages must stay under that.
+
+- **`loadFile` is a disabled command on a dedicated server.** The engine answers
+  `Trying to execute a disabled command 'loadfile' (1 arg)` and the calling
+  script dies at that line -- not a return of `""`, an abort. So the server
+  cannot read a page out of its own addon that way, and the obvious
+  implementation of this feature ships inert. `preprocessFile` is not the
+  substitute either: it is a C preprocessor, and it eats `//` inside inline
+  JavaScript. Reading the bytes through an extension is the way out, and reading
+  them off disk is better than an addon anyway -- no repack to ship a change.
+
+- **Replacement must be `document.open()/write()/close()`, not `innerHTML`.**
+  Scripts inserted via `innerHTML` never execute, so the page would render
+  correctly and do nothing -- a failure that looks like success. `document.write`
+  runs them, and because the frame is never renavigated the window object
+  survives, so the `A3API` binding from the original whitelisted load is still
+  there for the incoming document.
+
+Not yet measured: whether a page loaded with `OpenDataAsURL` gets the `A3API`
+binding at all. The wiki says the API "is injected into every local content
+page", which suggests yes, and if it holds it removes the need for a PBO
+baseline entirely. Until someone checks, the override approach above is the one
+that cannot lose the bridge.

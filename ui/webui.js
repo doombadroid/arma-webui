@@ -194,6 +194,38 @@
       if (ok) entry.resolve(value); else entry.reject(new Error(String(value)));
     },
 
+    /**
+     * Replace this document with markup the SERVER sent (webui_fnc_serve).
+     * Lets UI ship without a client repack; see that file for the whole story.
+     *
+     * document.open/write/close, NOT innerHTML. Scripts inserted via innerHTML
+     * never execute, which would leave every page's markup correct and all of
+     * its behaviour dead -- the worst failure mode available to a UI system,
+     * because it looks like it worked. document.write runs them.
+     *
+     * The window object survives the rewrite, so WEBUI and the A3API binding
+     * established at load are still here for the incoming document. That is the
+     * reason this can work at all: the frame is never renavigated, so the
+     * binding is never re-established (and could not be -- it comes from the
+     * whitelisted load).
+     *
+     * Guarded, because a failed override must leave the PBO page on screen
+     * rather than a half-written document.
+     */
+    _serve: function (b64) {
+      var html = decode(b64);
+      if (typeof html !== "string" || html.length === 0) return false;
+      try {
+        document.open();
+        document.write(html);
+        document.close();
+        return true;
+      } catch (e) {
+        try { console.error("[WEBUI] serve failed: " + e.message); } catch (e2) {}
+        return false;
+      }
+    },
+
     _emit: function (channel, b64) {
       var value = decode(b64);
       last[channel] = value;

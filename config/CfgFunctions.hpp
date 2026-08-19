@@ -26,6 +26,7 @@ class webui {
         class push {};          // SQF -> page value push
         class call {};          // SQF -> page call WITH a return value
         class exec {};          // ExecJS, queued until the page is up
+        class serve {};         // let the SERVER override a page's markup at open (no client repack)
         class freeze {};        // StopBrowser / ResumeBrowser
         class prompt {};        // native text entry overlay
         class volumeSlave {};   // make page audio obey the game's volume sliders
