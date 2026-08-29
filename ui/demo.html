@@ -43,6 +43,7 @@
    inject it. A <script src> cannot work here — no resolvable base URL. */
 window.WEBUIReady = new Promise(function (r) { window.__webuiReady = r; });
 if (typeof A3API !== "undefined" && A3API.RequestFile) {
+  window.__webuiBootPath = "stub";
   A3API.RequestFile("ui\\html\\webui.js").then(function (src) { (0, eval)(src); })
     .catch(function (e) { console.error("self-load failed", e); });
 }

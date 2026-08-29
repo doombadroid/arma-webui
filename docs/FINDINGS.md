@@ -260,3 +260,127 @@ binding at all. The wiki says the API "is injected into every local content
 page", which suggests yes, and if it holds it removes the need for a PBO
 baseline entirely. Until someone checks, the override approach above is the one
 that cannot lose the bridge.
+
+## 10. The bridge's arrival is a race, and section 1's client always won it
+
+**MEASURED 2026-08-28** (see the results block at the end of this section; the
+analysis below was written before them and one of its predictions was wrong).
+Originally filed as: Every other entry in this file is a number off a probe. This
+one is read out of the source and the engine's own documentation, and it is
+here because it corrects a claim that used to be stated as measured fact. Treat
+it as a hypothesis with a strong paper trail until `webui_fnc_bootProbe` has
+been run on a client that shows the symptom.
+
+`webui_fnc_init` used to carry this comment: *"PageLoaded does NOT fire when the
+page came from the control's url= attribute"*, and the whole readiness design
+was built on it. The wiki says otherwise — `PageLoaded` *"Fires when the current
+page has finished loading... This fires multiple times, when the current page
+(URL) was changed or when the browser is Resumed."* No exemption for `url=`.
+
+What is actually true is narrower and worse: the handler is attached inside
+`webui_fnc_init`, which runs from the dialog's `onLoad`, which runs **after** the
+browser began loading `url=`. If the page finishes loading first, the event
+fires into a control with no handler on it and is missed. That is a race, and it
+resolves against **fast** clients — a quick page load is exactly what makes the
+event beat the handler.
+
+The consequence is that everything queued by `webui_fnc_exec` — `_setRoot`, any
+server-side markup override, and every push the mission sends on open — waits
+for whichever readiness signal does land. The remaining paths were:
+
+- the page's own self-boot stub, which was in both shipped pages but **named
+  nowhere in README.md or INSTALL.md**, so anyone installing from the docs did
+  not have it (and the docs pointed at `WEBUI.file()`, which cannot load the
+  file that defines `WEBUI.file()`);
+- SQF's injector, which fired three times **0.3 s apart**, with the first shot
+  landing before the page could receive it — so the effective floor for a page
+  without the stub was 0.3–0.6 s plus a round trip;
+- a 3 s backstop timer.
+
+So the predicted symptom for a docs-following install is: page renders
+instantly, sits empty for something under a second, then populates — on every
+open of every screen. Invisible to anyone whose pages carry the stub, because
+for them the stub wins every time.
+
+Fixed by making the injector fire immediately and retry on a 50 ms backoff that
+stops the moment the bridge answers, and by having the injected statement
+announce itself (`HELLO`) instead of waiting for the page's own code to call
+something. Readiness now records which signal won and how late, and
+`webui_fnc_bootProbe` puts that on screen for cases where the RPT belongs to
+someone else.
+
+The general lesson is the one worth keeping: **a negative observation about an
+asynchronous event is a claim about when you attached your listener, not about
+the event.** "I never saw it fire" and "it does not fire" differ by a race, and
+that race can resolve the other way on hardware you do not own.
+
+### What the in-game run actually showed (2026-08-28, Arma 2.22, Malden, dev server)
+
+Four page opens on one client, with the reworked injector:
+
+| page | stub? | ready signal | init -> ready | injector |
+|---|---|---|---|---|
+| LANDING | yes | `message` | 0.394 s | **died before its first log line** |
+| HUDWEB | yes | `timer` | **3.022 s** | **died before its first log line** |
+| bridge harness | no | `hello` | 0.205 s | ran, 13421 B, 3 attempts |
+| bridge harness | no | `hello` | 0.200 s | ran, 13421 B, 3 attempts |
+
+Confirmed: the injector path works and is the readiness signal on a stub-less
+page, reproducibly, at ~0.20 s.
+
+**Refuted: the predicted ~50 ms floor.** It took three attempts over 0.315 s —
+the first two shots were dropped because the page was not yet able to receive
+them. The retry loop helps (against a 0.3–0.6 s floor for the old three-shot
+ladder) but the honest improvement is roughly **1.5–2x, not the 6x predicted**.
+Do not quote 50 ms; the receptiveness of the page, not the retry interval, is
+the binding constraint.
+
+**And the real finding, which was not the ladder at all:** see section 11.
+
+## 11. `loadFile` is refused on CLIENTS too, and a refusal ABORTS the script
+
+Section 9 recorded `loadFile` as a disabled command *on a dedicated server*. An
+in-game client RPT shows the same refusal, once per page open:
+
+```
+Trying to execute a disabled command 'loadfile' (1 arg)
+```
+
+This matters far more than it looks, because a refusal is **not** a return of
+`""` — it aborts the calling script at that line. Both SQF-side paths that
+deliver `webui.js` call `loadFile`, so when the refusal lands the injector dies
+*before its first log statement*, leaving no trace at all. That is exactly the
+signature on the two opens above with no `inject:` line, and it is why one of
+them fell all the way to the 3 s backstop.
+
+Three things were then measured directly, by logging immediately *before* each
+call (2026-08-28, b0788, three page opens):
+
+- **The refusal is NOT catchable.** A `try/catch` around both calls fired
+  **zero times** across five refusals. It is not an exception; it is thread
+  death. Do not wrap it and assume you have handled it — the absence of a catch
+  log reads as success and means the opposite.
+- **The unscheduled copy is refused every time.** The `loadFile` inside the
+  `PageLoaded` handler returned a byte count **0 of 3** opens. The scheduled
+  copy inside `spawn` succeeded on 1 of 3.
+- **Which destroyed an entire readiness signal, silently.** Because that
+  `loadFile` was the FIRST statement in `_markReady` and `PageLoaded` passes
+  `_reinject = true`, the handler aborted before it could mark readiness or
+  drain the queue. Across **seven measured opens on two builds, `pageloaded`
+  never once won the race** — not because the event does not fire, but because
+  its handler killed itself at its own first line.
+
+**That is the true origin of section 10's founding belief.** This file used to
+record "PageLoaded does NOT fire when the page came from the control's `url=`
+attribute" as engine behaviour, and the whole readiness design was built around
+routing past it. The event fires exactly as the wiki documents. The handler
+aborted. Reordering `_markReady` so the re-injection happens LAST — after the
+mark, the drain and the clamp check — costs nothing and restores the signal,
+because an abort at the end of a function loses only what is left to do.
+
+**The practical consequence:** SQF injection cannot be relied on as the primary
+boot path. The page's own `A3API.RequestFile` stub does not use `loadFile` and
+is the only path that always works — which is why INSTALL.md step 6 is
+mandatory rather than an optimisation, and why the injector should be treated
+as a net, not a mechanism.
+

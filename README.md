@@ -62,6 +62,24 @@ class Page {
 [(_this select 0) displayCtrl 4001] call webui_fnc_init;
 ```
 
+6. **Put the self-boot stub in the `<head>` of every page.** Not optional — it
+   is how the page gets `webui.js`, and a page without it populates noticeably
+   later on every open:
+
+```html
+<script>
+window.WEBUIReady = new Promise(function (r) { window.__webuiReady = r; });
+if (typeof A3API !== "undefined" && A3API.RequestFile) {
+  window.__webuiBootPath = "stub";
+  A3API.RequestFile("ui\\html\\webui.js").then(function (src) { (0, eval)(src); })
+    .catch(function (e) { console.error("self-load failed", e); });
+}
+</script>
+```
+
+Then `window.WEBUIReady.then(function (WEBUI) { ... })` — do not poll for
+`window.WEBUI`.
+
 `ui/demo.html` is a working page that exercises every direction; point a control
 at it to check an install.
 
@@ -91,7 +109,9 @@ several things that are not what they appear:
 
 - One self-contained `.html` per screen, or one page with view swapping.
 - Inline all CSS and JS. **No `<script src>`** — the page has no resolvable base
-  URL. Pull scripts with `WEBUI.file()` and eval them.
+  URL. Pull further scripts with `WEBUI.file()` and eval them. `webui.js` itself
+  is the exception and must use `A3API.RequestFile` directly (install step 6):
+  `WEBUI.file()` is a method *on* `WEBUI`, so it cannot be what loads `WEBUI`.
 - No external stylesheets, web fonts or CDNs. System font stack only.
 - `fetch`, `XMLHttpRequest`, `localStorage` and `IndexedDB` are blocked. State
   round-trips through SQF.
@@ -113,6 +133,7 @@ library rather than scaffolding:
 | `webui_fnc_focusProbe` | does window focus feed the clamp? |
 | `webui_fnc_latencyProbe` | what does a message cost, per leg, on both clocks? |
 | `webui_fnc_msgCapProbe` | find the exact page-to-SQF truncation cap (10240 chars) |
+| `webui_fnc_bootProbe` | why is this page slow to populate? which of the four readiness signals won, and how late — **reports on screen**, so it works when the affected client is not yours and you cannot read its RPT |
 
 The library also runs one check on its own: **`webui_fnc_clampCheck`**, once
 per session on the first ready page, detects the clamped-delivery world from

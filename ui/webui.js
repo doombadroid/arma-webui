@@ -219,6 +219,30 @@
         document.open();
         document.write(html);
         document.close();
+        /* RE-RESOLVE READINESS FOR THE INCOMING DOCUMENT. Backported from the
+           mission this library was extracted from, where it was found the hard
+           way; an independent review of the library then rediscovered the same
+           defect, so it is not situational.
+
+           The served markup carries the same mandatory self-boot stub every page
+           does (INSTALL.md step 6), and document.write runs it. That stub
+           installs a FRESH window.WEBUIReady and a fresh window.__webuiReady
+           resolver, discarding the already-resolved promise. Its own
+           RequestFile(...).then(eval) then re-enters this file and hits the
+           `_v >= 2` guard at the top, returning long before the resolver call at
+           the bottom -- so nothing ever settles the new promise.
+
+           The result is the exact failure this function's comments claim to have
+           avoided: markup renders perfectly, WEBUIReady.then() never fires, no
+           channel is ever subscribed, and the screen sits on its placeholder
+           forever. Worse, the window survives the rewrite (which is the whole
+           reason _serve can work at all), so window.WEBUI is right there -- but
+           the docs correctly tell pages not to poll it, leaving no escape hatch.
+
+           So settle it here, mirroring the handshake at the end of this file. */
+        if (window.__webuiReady) { window.__webuiReady(WEBUI); }
+        else if (!window.WEBUIReady) { window.WEBUIReady = Promise.resolve(WEBUI); }
+        WEBUI.ready = window.WEBUIReady || Promise.resolve(WEBUI);
         return true;
       } catch (e) {
         try { console.error("[WEBUI] serve failed: " + e.message); } catch (e2) {}
@@ -278,7 +302,47 @@
     } catch (_) {}
   });
 
+  /* Which boot path actually won, and when. Recorded because the two paths have
+     very different timing and nothing else can tell them apart from inside the
+     page: the self-boot stub stamps __webuiBootPath before it evals this file,
+     so anything unstamped by the time we run got here through SQF's ExecJS.
+     webui_fnc_bootProbe reads both; see docs/FINDINGS.md section 10 and
+     INSTALL.md step 6. */
+  WEBUI.bootPath = window.__webuiBootPath || "sqf";
+  WEBUI.bootAt   = (typeof performance !== "undefined" && performance.now)
+    ? performance.now() : 0;
+
   window.WEBUI = WEBUI;
+
+  /* ANNOUNCE ARRIVAL. This is what tells SQF the bridge is up, and it lives here
+     -- in the file itself -- rather than only in the statement SQF appends when
+     it injects, because the two delivery paths are not equally reliable.
+
+     SQF's injector reaches this file with loadFile, which is REFUSED in some
+     client contexts and aborts the calling thread uncatchably (FINDINGS 11): it
+     failed on two of three measured page opens. The page's own self-boot stub
+     reaches it with A3API.RequestFile, which is not affected. So announcing from
+     inside the file makes readiness depend on the path that works, instead of
+     the one that does not.
+
+     It matters most for a page that never calls SQF at all. A pure display
+     screen -- one that only subscribes, or not even that -- has nothing to say,
+     so the "any inbound message" signal can never fire for it. Measured: such a
+     page sat on the 3 second backstop on every open, while its bridge had in
+     fact been live within a few hundred ms the whole time.
+
+     SQF still appends the same announcement after this file when it injects,
+     and that is not redundant: on a re-injection the guard at the top of this
+     IIFE returns early and nothing in here runs at all.
+
+     __webuiHello is set only AFTER SendAlert returns, so a send that is dropped
+     or throws leaves the next attempt free to try again. */
+  try {
+    if (!window.__webuiHello && typeof A3API !== "undefined" && A3API.SendAlert) {
+      A3API.SendAlert('["HELLO",1]');
+      window.__webuiHello = 1;
+    }
+  } catch (e) { /* no bridge to announce to; SQF's timer backstop covers it */ }
 
   // Resolve the readiness promise for anything that asked before we existed.
   // window.WEBUIReady is set by the page's self-boot stub; if SQF injection won the

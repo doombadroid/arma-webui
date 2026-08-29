@@ -24,13 +24,28 @@
 params [["_ctrl", controlNull, [controlNull]], ["_resume", false, [false]]];
 if (isNull _ctrl) exitWith { false };
 
+// Readiness is about to be re-run, so the readiness CLOCK has to restart with
+// it. webui_readyAt is re-stamped by the next mark but webui_initAt is written
+// only by fn_init, so without this the two belong to different epochs and
+// webui_fnc_bootProbe reports "init -> ready" as the whole time the page spent
+// frozen -- a healthy page resumed after two minutes reads "SLOW -- 120.34s to
+// first data", indistinguishable from a real failure on the one screen a
+// non-developer is asked to screenshot.
+private _resetReadyClock = {
+    params ["_c"];
+    _c setVariable ["webui_ready", false];
+    _c setVariable ["webui_initAt", diag_tickTime];
+    _c setVariable ["webui_readyAt", nil];
+    _c setVariable ["webui_readySignal", nil];
+};
+
 if (_resume) then {
-    _ctrl setVariable ["webui_ready", false];      // PageLoaded will set it again
+    [_ctrl] call _resetReadyClock;                 // PageLoaded will set it again
     _ctrl ctrlWebBrowserAction ["ResumeBrowser"];
     diag_log "[WEBUI] browser resumed";
 } else {
     _ctrl ctrlWebBrowserAction ["StopBrowser"];
-    _ctrl setVariable ["webui_ready", false];
+    [_ctrl] call _resetReadyClock;
     diag_log "[WEBUI] browser frozen (last frame kept, resources released)";
 };
 true

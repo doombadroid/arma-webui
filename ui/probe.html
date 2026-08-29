@@ -22,6 +22,7 @@ h1{margin:0 0 .4rem;font-size:13px;letter-spacing:.2em;color:#33ffbb}
 /* self-boot, same as the other pages */
 window.WEBUIReady = new Promise(function (r) { window.__webuiReady = r; });
 if (typeof A3API !== "undefined" && A3API.RequestFile) {
+  window.__webuiBootPath = "stub";
   A3API.RequestFile("ui\\html\\webui.js").then(function (src) { (0, eval)(src); })
     .catch(function (e) { console.error("self-load failed", e); });
 }
