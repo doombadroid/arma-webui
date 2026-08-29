@@ -69,6 +69,17 @@
     _have is what the client already has for that page (a version tag, "" if
     unknown), so a host that tracks versions can answer "unchanged" cheaply
     instead of shipping bytes on every open.
+
+    THE CALLBACK IS SAFE TO HOLD AND CALL LATER, from any scope -- a spawn, a
+    remoteExec'd handler, a network reply minutes afterwards. That is the point
+    of it, and it is worth stating because it was not true before: the callback
+    used to reach for this function's local variables, which do not survive
+    outside its own call stack, so only a fetcher that answered synchronously
+    ever worked. Answer once; a second answer on the same callback is ignored.
+
+    Not answering at all is a supported outcome and needs no cleanup from the
+    host. The pending entry expires after _timeout seconds (default 5) and the
+    PBO page simply stands, which is what it was already doing.
 */
 
 params [["_ctrl", controlNull, [controlNull]], ["_pageId", "", [""]], ["_timeout", 5, [0]]];
@@ -112,13 +123,73 @@ if (_hit isNotEqualTo "") exitWith { [_ctrl, _hit] call _apply };
 // The host's fetcher is asynchronous and may never answer -- a server that is
 // not running this feature simply will not reply. That is not an error state
 // and must not be reported as one: the PBO page is already on screen.
-private _done = false;
-private _cb = {
-    params [["_markup", "", [""]]];
-    if (_markup isEqualTo "") exitWith {};
+//
+// SQF CODE DOES NOT CAPTURE LOCALS, AND THAT BROKE THIS ENTIRELY.
+// The callback below used to reference _pageId, _ctrl and _apply directly. A
+// `call`ed block runs in the CALLER's scope chain, so that worked only while
+// the fetcher invoked the callback synchronously, inside this function's own
+// call stack. The documented case is the other one: a fetcher that asks the
+// server and answers later, from a spawn or a remoteExec'd handler. By then
+// this scope is gone, all three names are undefined, and the callback dies on
+// "Undefined variable" -- silently, because a dead script drops the override
+// and the PBO page stays up, which is exactly what success looks like here.
+// So the feature's own headline use case never worked.
+//
+// The fix is a TICKET. Each fetch gets an integer, the context is parked in
+// uiNamespace under it, and the callback is compiled with only that integer
+// baked into its source -- so it depends on nothing but globals.
+//
+// The ticket is an INTEGER on purpose. Baking the page id into compiled source
+// would put caller-supplied text inside an SQF literal, one quote away from
+// being an injection site in a file whose whole security argument is that it
+// never compiles what it is given. A number cannot carry a quote.
+private _recv = {
+    params ["_ticket", "_args"];
+    private _pend = uiNamespace getVariable ["webui_servePending", createHashMap];
+    private _ctx = _pend getOrDefault [_ticket, []];
+    if (_ctx isEqualTo []) exitWith {};          // timed out, or answered twice
+    _pend deleteAt _ticket;                       // one answer per ticket
+    _ctx params ["_c", "_pid", "_applyFn"];
+
+    // The documented call is [_markup] call _cb, but a host that passes the
+    // bare string is not doing anything unreasonable -- accept both rather than
+    // fail on a detail no compiler checks.
+    private _markup = "";
+    if (_args isEqualType []) then {
+        if (count _args > 0) then { _markup = _args select 0 };
+    } else { _markup = _args };
+    if !(_markup isEqualType "") exitWith {};
+    if (_markup isEqualTo "") exitWith {};        // "nothing to serve" is normal
+
     private _cc = uiNamespace getVariable ["webui_serveCache", createHashMap];
-    _cc set [_pageId, _markup];
-    [_ctrl, _markup] call _apply;
+    _cc set [_pid, _markup];
+    [_c, _markup] call _applyFn;
+};
+uiNamespace setVariable ["webui_serveRecv", _recv];
+
+private _pend = uiNamespace getVariable ["webui_servePending", createHashMap];
+uiNamespace setVariable ["webui_servePending", _pend];
+private _ticket = (uiNamespace getVariable ["webui_serveSeq", 0]) + 1;
+uiNamespace setVariable ["webui_serveSeq", _ticket];
+_pend set [_ticket, [_ctrl, _pageId, _apply]];
+
+private _cb = compile format
+    ["[%1, _this] call (uiNamespace getVariable ['webui_serveRecv', {}]);", _ticket];
+
+// _timeout used to be declared and never read, advertising a bounded wait that
+// did not exist. It bounds the PENDING ENTRY, not the page: a fetcher that
+// never answers would otherwise pin a control reference in uiNamespace for the
+// rest of the session, once per page open. Expiry changes nothing on screen --
+// the PBO page has been up since before this function ran.
+[_ticket, _timeout] spawn {
+    params ["_ticket", "_timeout"];
+    uiSleep _timeout;
+    private _pend = uiNamespace getVariable ["webui_servePending", createHashMap];
+    if (_ticket in _pend) then {
+        _pend deleteAt _ticket;
+        diag_log format ["[WEBUI] serve: fetch %1 expired after %2s (no reply; PBO page stands)",
+            _ticket, _timeout];
+    };
 };
 
 [_pageId, "", _cb] call _fetcher;
