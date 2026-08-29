@@ -378,6 +378,14 @@ aborted. Reordering `_markReady` so the re-injection happens LAST — after the
 mark, the drain and the clamp check — costs nothing and restores the signal,
 because an abort at the end of a function loses only what is left to do.
 
+**Confirmed by the reverse case, 2026-08-29.** On a deck page open, the RPT
+shows `inject: loadFile` with no `webui.js N bytes` line after it -- SQF's
+injector died at the refusal and delivered nothing -- and the bridge still came
+up, readiness landed via `pageloaded` in 0.231s, and all eleven self-test checks
+passed. The page's own `A3API.RequestFile` stub carried the whole boot on its
+own. That is the architecture working as intended: the reliable path does not
+touch `loadFile`, and the unreliable one is a net.
+
 **The practical consequence:** SQF injection cannot be relied on as the primary
 boot path. The page's own `A3API.RequestFile` stub does not use `loadFile` and
 is the only path that always works — which is why INSTALL.md step 6 is

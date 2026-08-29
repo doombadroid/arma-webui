@@ -138,11 +138,16 @@ _ctrl ctrlWebBrowserAction ["ExecJS",
 private _bootBy = diag_tickTime + 5;
 waitUntil { uiSleep 0.1; !isNil { uiNamespace getVariable "WEBUI_selfTestBoot" } || { diag_tickTime > _bootBy } };
 private _bootPath = uiNamespace getVariable ["WEBUI_selfTestBoot", "?"];
-["boot path is known", _bootPath in ["stub", "sqf"], format ["bootPath=%1", _bootPath]] call _check;
-// Not a failure -- a page can legitimately rely on injection -- but it is the
-// single biggest thing to fix before handing an install to somebody else.
+["boot path is reported", _bootPath in ["stub", "sqf", "unstamped"],
+    format ["bootPath=%1", _bootPath]] call _check;
+// Neither of these is a failure, and the difference between them matters:
+// "sqf" is a real finding, "unstamped" is the tool admitting it cannot tell.
+// Reporting the second as the first sends the reader to fix a stub that works.
 if (_bootPath isEqualTo "sqf") then {
     diag_log "[WEBUI-TEST] NOTE this page has no working self-boot stub (INSTALL.md step 6). It works, but it is the slow and fragile path.";
+};
+if (_bootPath isEqualTo "unstamped") then {
+    diag_log "[WEBUI-TEST] NOTE boot path unknown -- this page's stub predates the stamp. NOT a fault. Add window.__webuiBootPath = 'stub'; to the stub, or read the RPT: 'inject: loadFile' with no 'webui.js N bytes' after it means SQF delivered nothing and the stub must have.";
 };
 
 // ------------------------------------------------- serve async callback ---

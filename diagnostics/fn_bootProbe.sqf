@@ -29,6 +29,15 @@
                no self-boot stub or its stub is broken. Add or fix it --
                INSTALL.md step 6. This is the slow path and the one behind
                "screens take a moment to appear".
+        'unstamped'
+               CANNOT TELL. The page's stub predates the boot-path stamp, so
+               nothing recorded who delivered the bridge. This is NOT a fault
+               and does NOT mean the stub is broken -- add the one line from
+               INSTALL.md step 6 (window.__webuiBootPath = "stub";) to the
+               stub if you want this field to answer. To settle it without
+               touching the page, check the RPT: an "inject: loadFile" line
+               with no "webui.js N bytes" line after it means SQF never
+               delivered anything, so the stub must have.
 
       ready signal -- WHICH SIGNAL WON THE RACE. Timing detail, not a verdict.
         'hello'      the injector's announcement arrived first. Note this can
@@ -153,6 +162,9 @@ private _verdict = switch (true) do {
 private _advice = "";
 if (_path isEqualTo "sqf") then {
     _advice = _advice + "<br/>Page has no working self-boot stub (INSTALL.md step 6). Adding it is the single biggest win.";
+};
+if (_path isEqualTo "unstamped") then {
+    _advice = _advice + "<br/>Boot path unknown: this page's stub predates the stamp. Not a fault. Add window.__webuiBootPath = 'stub'; to the stub to make this field answer.";
 };
 if (_signal isEqualTo "timer") then {
     _advice = _advice + "<br/>Nothing reached the page for 3s. Check allowedHTMLLoadURIs covers this page's path, then check the RPT for an 'inject: loadFile' line with no 'webui.js N bytes' line after it -- that missing line means loadFile was refused (FINDINGS 11).";

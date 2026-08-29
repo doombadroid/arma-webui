@@ -308,7 +308,22 @@
      so anything unstamped by the time we run got here through SQF's ExecJS.
      webui_fnc_bootProbe reads both; see docs/FINDINGS.md section 10 and
      INSTALL.md step 6. */
-  WEBUI.bootPath = window.__webuiBootPath || "sqf";
+  // "unstamped", NOT "sqf". An unknown must never be reported as a specific
+  // answer, and least of all as the alarming one.
+  //
+  // The stamp is written by the page's self-boot stub (before it evals this
+  // file) and by SQF's injector (as a prefix ahead of it). A page whose stub
+  // predates the stamp -- which is every page written before 2026-08-29,
+  // including every page a third party already has installed -- carries no
+  // stamp at all, and defaulting that to "sqf" accused a perfectly good stub of
+  // not working. It did exactly that on the mission this library came from:
+  // measured, the SQF injector's loadFile was REFUSED on the very open being
+  // reported, so the stub was demonstrably the only thing that could have
+  // delivered the bridge, and the diagnostic still said "sqf" and told the
+  // reader to go fix their stub.
+  //
+  // Missing data has to look like missing data, or it gets acted on.
+  WEBUI.bootPath = window.__webuiBootPath || "unstamped";
   WEBUI.bootAt   = (typeof performance !== "undefined" && performance.now)
     ? performance.now() : 0;
 
