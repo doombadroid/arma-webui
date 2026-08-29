@@ -24,6 +24,11 @@ params [
 ];
 
 disableSerialization;
+// First-run defaults: `with uiNamespace do { WEBUI_promptBusy }` on an unset
+// variable yields nil, and nil in a condition is a type error, not false.
+if (isNil { with uiNamespace do { WEBUI_promptBusy } }) then {
+    with uiNamespace do { WEBUI_promptBusy = false; WEBUI_promptGen = 0; };
+};
 // resolve the hosting display from the browser control published by
 // webui_fnc_init, so this works for any dialog, not just the demo
 private _webCtrl = uiNamespace getVariable ["WEBUI_ctrl", controlNull];
@@ -44,21 +49,54 @@ if (isNull _edit) exitWith {
 ];
 _edit ctrlSetText (_prefill select [0, _max]);
 
-with uiNamespace do { WEBUI_promptDone = 0; WEBUI_promptResult = nil; };
+// ONE OVERLAY, ONE PROMPT AT A TIME -- AND IT HAS TO SAY SO.
+// idc 937410-937415 is a single set of controls, so a second concurrent prompt
+// was never actually possible: it retitled the box under the first one and both
+// then waited on ONE shared done/result pair, so a single OK press released
+// both. The loser read a result that was already consumed, got nil, and
+// returned null -- which this function's contract defines as "the player
+// cancelled". A caller could not tell a refusal from a cancel from a stolen
+// answer, and the page acted on a cancel that never happened.
+//
+// Refuse instead. A prompt that cannot have the overlay returns nil the same as
+// a cancel does -- there is nowhere else for it to go through this API -- but it
+// says so in the RPT rather than quietly corrupting the prompt that IS running.
+if (with uiNamespace do { WEBUI_promptBusy }) exitWith {
+    diag_log format ["[PROMPT] refused '%1' -- another prompt already owns the overlay", _title];
+    nil
+};
+
+// GENERATION STAMP. The busy flag stops two prompts overlapping; this stops a
+// LATE one interfering. Button presses arrive as engine UI events and can land
+// after the prompt they belong to has already given up (the dialog closed under
+// it, say). Without a stamp that stale press satisfies whichever prompt is
+// waiting next and hands it the wrong answer. A waiter accepts only a done
+// signal carrying its own generation.
+private _gen = (with uiNamespace do { WEBUI_promptGen }) + 1;
+with uiNamespace do {
+    WEBUI_promptGen    = _gen;
+    WEBUI_promptBusy   = true;
+    WEBUI_promptDone   = 0;
+    WEBUI_promptResult = nil;
+};
 
 { (_display displayCtrl _x) ctrlShow true; } forEach _ids;
 ctrlSetFocus _edit;
 
-// wait for a button, or for the dialog to go away under us
+// wait for OUR button press, or for the dialog to go away under us
 waitUntil {
-    (with uiNamespace do { WEBUI_promptDone }) isEqualTo 1
+    (with uiNamespace do { WEBUI_promptDone }) isEqualTo _gen
     || { isNull (ctrlParent _webCtrl) }
 };
 
 { (_display displayCtrl _x) ctrlShow false; } forEach _ids;
 
 private _out = with uiNamespace do { WEBUI_promptResult };
-with uiNamespace do { WEBUI_promptDone = 0; WEBUI_promptResult = nil; };
+with uiNamespace do {
+    WEBUI_promptDone   = 0;
+    WEBUI_promptResult = nil;
+    WEBUI_promptBusy   = false;
+};
 
 if (isNil "_out") exitWith { nil };
 if !(_out isEqualType "") exitWith { nil };

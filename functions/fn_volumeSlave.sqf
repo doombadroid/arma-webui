@@ -58,7 +58,7 @@ if (isNull _ctrl) exitWith { diag_log "[WEBUI-VOL] null control"; false };
 
 [_ctrl, _emitter, _range] spawn {
     params ["_ctrl", "_emitter", "_range"];
-    private _last = [-1, -1, -1];
+    private _last = [-1, -1, -1, -1];
     diag_log "[WEBUI-VOL] running -- move the in-game sliders and watch the page";
 
     while { !isNull _ctrl } do {
@@ -75,13 +75,36 @@ if (isNull _ctrl) exitWith { diag_log "[WEBUI-VOL] null control"; false };
             };
         };
 
-        private _now = [_mus, _snd, _dist];
-        // only speak when something changed -- a still player costs nothing
-        if (!(_now isEqualTo _last)) then {
-            _last = _now;
-            [_ctrl, "vol", createHashMapFromArray [
-                ["music", _mus], ["sound", _snd], ["radio", radioVolume], ["dist", _dist]
-            ]] call webui_fnc_push;
+        // radioVolume BELONGS IN THE COMPARISON, not just the payload. It was
+        // shipped every push and watched by none of them, so moving only the
+        // Radio slider changed a value nobody was comparing: the guard below saw
+        // no change, sent nothing, and the page kept a stale radio gain for the
+        // rest of the session. Every field that goes out has to be a field that
+        // can trigger a send.
+        private _rad = radioVolume;
+        private _now = [_mus, _snd, _rad, _dist];
+
+        // Do not queue while the page cannot receive. webui_fnc_exec holds
+        // statements until the bridge is up and caps the queue at 200; a frozen
+        // browser sets webui_ready false with no signal coming to clear it (there
+        // is no PageLoaded until Resume), so at 4 Hz this loop fills that queue in
+        // under a minute and then logs "exec queue full, dropping" forever. On
+        // resume all 200 stale volume pushes replay in order, every one of them
+        // superseded by the last. Skipping while frozen costs nothing: the values
+        // are re-read from scratch on the next tick, and the push right after
+        // fn_freeze's resume carries the current state anyway.
+        if (_ctrl getVariable ["webui_ready", false]) then {
+            // only speak when something changed -- a still player costs nothing
+            if (!(_now isEqualTo _last)) then {
+                _last = _now;
+                [_ctrl, "vol", createHashMapFromArray [
+                    ["music", _mus], ["sound", _snd], ["radio", _rad], ["dist", _dist]
+                ]] call webui_fnc_push;
+            };
+        } else {
+            // Force a resend once the page comes back, whatever the sliders did
+            // while it was down.
+            _last = [-1, -1, -1, -1];
         };
         uiSleep 0.25;
     };

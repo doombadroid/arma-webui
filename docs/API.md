@@ -76,7 +76,7 @@ Typed text reaches the DOM normally, so a real `<input>` is fine. This exists
 for a native-looking prompt, or when the browser is frozen:
 
 ```js
-const name = await WEBUI.call("prompt", ["Rename", current, 24], 60000);
+const name = await WEBUI.call("promptText", ["Rename", current, 24], 60000);
 if (name !== null) apply(name);      // null = cancelled
 ```
 

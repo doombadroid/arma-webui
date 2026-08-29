@@ -126,10 +126,14 @@ if (typeof A3API !== "undefined" && A3API.RequestFile) {
 </div>
 
 <script>
-/* webui.js is injected by webui_fnc_init over ExecJS — no <script src>, since
-   a page can be handed to Chromium without a resolvable base URL. WEBUI therefore
-   appears shortly after this script runs, so poll for it. WEBUI.on() replays the
-   last value per channel, so nothing pushed before we subscribe is lost. */
+/* No <script src> — a page can be handed to Chromium with no resolvable base
+   URL. The self-boot stub in <head> pulls webui.js with A3API.RequestFile and
+   resolves window.WEBUIReady, so wait on that promise rather than polling for
+   window.WEBUI. This page previously polled on a 100ms ladder, which is what
+   INSTALL.md now tells readers NOT to do — and it is the page INSTALL tells them
+   to open to check an install, so it was teaching the opposite of the rule by
+   example. WEBUI.on() replays the last value per channel, so nothing pushed
+   before we subscribe is lost. */
 function el(id){ return document.getElementById(id); }
 
 async function doPrompt(){
@@ -275,8 +279,14 @@ async function burst(){
   catch(e){ clog('burst failed: '+e.message); }
 }
 
-(function wait(n){
-  if (window.WEBUI){
+var booted = false;
+/* Both boot paths failing would otherwise be a silent blank panel. */
+setTimeout(function () {
+  if (!booted) { el('state').textContent = 'no bridge'; }
+}, 12000);
+
+window.WEBUIReady.then(function (WEBUI) {
+    booted = true;
     const p = el('state'); p.textContent = 'bridge live (4-way)'; p.className = 'pill live';
 
     /* Exposed to SQF for webui_fnc_bench: what viewport does the page
@@ -317,11 +327,7 @@ async function burst(){
       el('fps').textContent   = v[1];
       el('fpsbar').style.width = Math.max(0, Math.min(100, (v[1] / 120) * 100)) + '%';
     });
-    return;
-  }
-  if (n > 100){ el('state').textContent = 'no bridge'; return; }
-  setTimeout(function(){ wait(n + 1); }, 100);
-})(0);
+});
 </script>
 </body>
 </html>
