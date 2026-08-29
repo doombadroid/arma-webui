@@ -89,7 +89,7 @@ class WebUI_PromptOk {
     // Stamps WEBUI_promptGen, not a bare 1: webui_fnc_prompt only accepts a done
     // signal carrying its own generation, so a press that arrives after its prompt
     // gave up cannot release the next one with the wrong answer.
-    onButtonClick = "with uiNamespace do { WEBUI_promptResult = ctrlText ((ctrlParent (uiNamespace getVariable ['WEBUI_ctrl', controlNull])) displayCtrl 937413); WEBUI_promptDone = WEBUI_promptGen; };";
+    onButtonClick = "with uiNamespace do { WEBUI_promptResult = ctrlText ((ctrlParent (uiNamespace getVariable ['WEBUI_ctrl', controlNull])) displayCtrl 937413); WEBUI_promptDone = uiNamespace getVariable ['WEBUI_promptGen', 0]; };";
 };
 class WebUI_PromptCancel : WebUI_PromptOk {
     idc = 937415; show = 0;
@@ -98,5 +98,5 @@ class WebUI_PromptCancel : WebUI_PromptOk {
     colorText[]       = {0.78,0.32,0.32,1};
     colorBackground[] = {0.02,0.045,0.035,1};
     colorFocused[]    = {0.05,0.09,0.07,1};
-    onButtonClick = "with uiNamespace do { WEBUI_promptResult = nil; WEBUI_promptDone = WEBUI_promptGen; };";
+    onButtonClick = "with uiNamespace do { WEBUI_promptResult = nil; WEBUI_promptDone = uiNamespace getVariable ['WEBUI_promptGen', 0]; };";
 };

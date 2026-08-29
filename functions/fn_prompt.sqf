@@ -24,11 +24,20 @@ params [
 ];
 
 disableSerialization;
-// First-run defaults: `with uiNamespace do { WEBUI_promptBusy }` on an unset
-// variable yields nil, and nil in a condition is a type error, not false.
-if (isNil { with uiNamespace do { WEBUI_promptBusy } }) then {
-    with uiNamespace do { WEBUI_promptBusy = false; WEBUI_promptGen = 0; };
-};
+// FIRST-RUN DEFAULTS, SET INDEPENDENTLY AND READ SAFELY -- both parts matter.
+//
+// This used to initialise BusY and Gen together behind one isNil check on Busy.
+// Anything that set Busy without setting Gen therefore skipped the whole block
+// and left Gen undefined, and reading an undefined variable inside
+// `with uiNamespace do { ... }` does not yield nil -- it raises "Undefined
+// variable in expression". The self-test hit exactly that and it also meant
+// prompt_overlay.hpp's button handler could throw mid-click. Two variables
+// behind one guard is one variable too many.
+//
+// getVariable-with-a-default cannot throw, and setting each from its own
+// current value is idempotent.
+uiNamespace setVariable ["WEBUI_promptBusy", uiNamespace getVariable ["WEBUI_promptBusy", false]];
+uiNamespace setVariable ["WEBUI_promptGen",  uiNamespace getVariable ["WEBUI_promptGen",  0]];
 // resolve the hosting display from the browser control published by
 // webui_fnc_init, so this works for any dialog, not just the demo
 private _webCtrl = uiNamespace getVariable ["WEBUI_ctrl", controlNull];
@@ -61,7 +70,7 @@ _edit ctrlSetText (_prefill select [0, _max]);
 // Refuse instead. A prompt that cannot have the overlay returns nil the same as
 // a cancel does -- there is nowhere else for it to go through this API -- but it
 // says so in the RPT rather than quietly corrupting the prompt that IS running.
-if (with uiNamespace do { WEBUI_promptBusy }) exitWith {
+if (uiNamespace getVariable ["WEBUI_promptBusy", false]) exitWith {
     diag_log format ["[PROMPT] refused '%1' -- another prompt already owns the overlay", _title];
     nil
 };
@@ -72,7 +81,7 @@ if (with uiNamespace do { WEBUI_promptBusy }) exitWith {
 // it, say). Without a stamp that stale press satisfies whichever prompt is
 // waiting next and hands it the wrong answer. A waiter accepts only a done
 // signal carrying its own generation.
-private _gen = (with uiNamespace do { WEBUI_promptGen }) + 1;
+private _gen = (uiNamespace getVariable ["WEBUI_promptGen", 0]) + 1;
 with uiNamespace do {
     WEBUI_promptGen    = _gen;
     WEBUI_promptBusy   = true;
@@ -85,13 +94,13 @@ ctrlSetFocus _edit;
 
 // wait for OUR button press, or for the dialog to go away under us
 waitUntil {
-    (with uiNamespace do { WEBUI_promptDone }) isEqualTo _gen
+    (uiNamespace getVariable ["WEBUI_promptDone", 0]) isEqualTo _gen
     || { isNull (ctrlParent _webCtrl) }
 };
 
 { (_display displayCtrl _x) ctrlShow false; } forEach _ids;
 
-private _out = with uiNamespace do { WEBUI_promptResult };
+private _out = uiNamespace getVariable ["WEBUI_promptResult", nil];
 with uiNamespace do {
     WEBUI_promptDone   = 0;
     WEBUI_promptResult = nil;

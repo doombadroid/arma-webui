@@ -195,17 +195,35 @@ if (!isNull _promptDisplay) then {
 if (!_haveOverlay) then {
     diag_log "[WEBUI-TEST] SKIP prompt guard -- this dialog does not include prompt_overlay.hpp (idc 937413 absent), so the check cannot distinguish a working guard from a missing overlay. Run this against a dialog that has it.";
 } else {
-    private _genBefore = with uiNamespace do { WEBUI_promptGen };
-    if (isNil "_genBefore") then { _genBefore = 0 };
-    with uiNamespace do { WEBUI_promptBusy = true; };
+    // getVariable-with-a-default, NOT `with uiNamespace do { NAME }`. The latter
+    // RAISES on an undefined variable rather than yielding nil, and the first
+    // version of this test did exactly that: it set WEBUI_promptBusy before
+    // calling fn_prompt, which skipped fn_prompt's own initialisation and left
+    // WEBUI_promptGen undefined, so both reads threw, both fell back to 0, and
+    // "gen 0 -> 0" reported PASS while comparing two fallbacks. A check that
+    // cannot fail is worse than no check -- it spends the reader's trust.
+    private _genSaved = uiNamespace getVariable ["WEBUI_promptGen", 0];
+
+    // SEED A SENTINEL so "unchanged" is a real assertion. Comparing the value to
+    // itself proves nothing if both sides can quietly default to the same number.
+    private _sentinel = 424242;
+    uiNamespace setVariable ["WEBUI_promptGen", _sentinel];
+    uiNamespace setVariable ["WEBUI_promptBusy", true];
     private _refused = ["selftest", "", 8] call webui_fnc_prompt;
-    with uiNamespace do { WEBUI_promptBusy = false; };
+    uiNamespace setVariable ["WEBUI_promptBusy", false];
     ["prompt refuses re-entry while busy", isNil "_refused",
         "second concurrent prompt returned nil instead of stealing the overlay"] call _check;
-    private _genAfter = with uiNamespace do { WEBUI_promptGen };
-    if (isNil "_genAfter") then { _genAfter = 0 };
-    ["prompt generation not consumed by a refusal", _genAfter isEqualTo _genBefore,
-        format ["gen %1 -> %2", _genBefore, _genAfter]] call _check;
+
+    private _genAfter = uiNamespace getVariable ["WEBUI_promptGen", -1];
+    ["prompt generation untouched by a refusal", _genAfter isEqualTo _sentinel,
+        format ["seeded %1, read back %2", _sentinel, _genAfter]] call _check;
+
+    // fn_prompt must leave the generation DEFINED whatever happens, or
+    // prompt_overlay.hpp's button handler throws mid-click.
+    ["prompt generation is always initialised", !isNil { uiNamespace getVariable "WEBUI_promptGen" },
+        "WEBUI_promptGen exists after a refused prompt"] call _check;
+
+    uiNamespace setVariable ["WEBUI_promptGen", _genSaved];   // restore
 };
 
 // --------------------------------------------------------------- hygiene --
