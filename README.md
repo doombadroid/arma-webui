@@ -133,6 +133,7 @@ library rather than scaffolding:
 | `webui_fnc_focusProbe` | does window focus feed the clamp? |
 | `webui_fnc_latencyProbe` | what does a message cost, per leg, on both clocks? |
 | `webui_fnc_msgCapProbe` | find the exact page-to-SQF truncation cap (10240 chars) |
+| `webui_fnc_selfTest` | **one green/red verdict for the whole install** — run this before handing the library to anyone; procedure in [docs/HANDOFF_TEST.md](docs/HANDOFF_TEST.md) |
 | `webui_fnc_bootProbe` | why is this page slow to populate? which of the four readiness signals won, and how late — **reports on screen**, so it works when the affected client is not yours and you cannot read its RPT |
 
 The library also runs one check on its own: **`webui_fnc_clampCheck`**, once

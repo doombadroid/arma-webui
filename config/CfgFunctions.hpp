@@ -36,6 +36,7 @@ class webui {
         file = "webui\diagnostics";
         class awaitPage {};     // wait for a page, hand back its control
         class bootProbe {};     // why is this page slow to show data? reports on screen
+        class selfTest {};      // one green/red verdict: is this install safe to hand off?
         class countDraws {};    // count "Draw" events over a window
         class drawRate {};      // how often does the engine actually paint?
         class bench {};         // A/B/A frame cost + real viewport vs control size
