@@ -52,21 +52,42 @@ diag_log "[WEBUI-BENCH] ---- start ---- stand still, do not move the mouse";
 
 // A: nothing open. Close whatever is up and let it settle.
 if (dialog) then { closeDialog 0; uiSleep 1; };
+// VERIFY THE BASELINE IS ACTUALLY BASELINE. A' aborts when a control is still
+// alive; A never checked at all, so the "no browser" sample could be taken with
+// an RscTitles page already up -- and then B minus A is the cost of nothing.
+if (!isNull (uiNamespace getVariable ["WEBUI_ctrl", controlNull])) exitWith {
+    diag_log "[WEBUI-BENCH] ABORT: a browser control is already live, so the 'no browser' baseline would not be one. Close every web page (an RscTitles overlay does not close with Esc) and rerun.";
+    systemChat "bench ABORTED -- a page is already open (see RPT)";
+};
 private _before = ["A baseline, no browser"] call _sampleFps;
 
 // B: browser open and idle. The library does not know the host's dialog names,
 // so arm this first and open your page when told.
+// Use the shared helper rather than a private copy of it. This inlined the
+// same "wait for non-null" defect webui_fnc_awaitPage had: WEBUI_ctrl is never
+// cleared, so a leftover RscTitles overlay (which Esc does not close, FINDINGS
+// 8) was adopted instantly and the whole A/B/A was measured against a control
+// the operator never opened.
 diag_log "[WEBUI-BENCH] open a page now (waiting up to 45s)";
-private _deadline = diag_tickTime + 45;
-private _ctrl = controlNull;
-waitUntil {
-    uiSleep 0.5;
-    _ctrl = uiNamespace getVariable ["WEBUI_ctrl", controlNull];
-    !isNull _ctrl || { diag_tickTime > _deadline }
-};
+private _ctrl = [45, 3] call webui_fnc_awaitPage;
 if (isNull _ctrl) exitWith { diag_log "[WEBUI-BENCH] no page was opened"; };
-uiSleep 3;
 private _disp = ctrlParent _ctrl;
+// The automatic clamp check fires ~2s after the first ready page and drives a
+// forced 60Hz style mutation for 3s. Sampling "browser open, IDLE" across that
+// measures the clamp check, not idle cost. Wait for it to have filed a verdict
+// (or to have been opted out of) before sampling.
+private _clampWait = diag_tickTime + 12;
+waitUntil {
+    uiSleep 0.25;
+    isNull _ctrl
+      || { !isNil { missionNamespace getVariable "webui_clampVerdict" } }
+      || { missionNamespace getVariable ["webui_clampCheckDisabled", false] }
+      || { diag_tickTime > _clampWait }
+};
+if (isNull _ctrl) exitWith { diag_log "[WEBUI-BENCH] control went away before the B sample"; };
+if (_ctrl getVariable ["webui_drawBusy", false]) then {
+    diag_log "[WEBUI-BENCH] WARNING: a draw sample is still running on this control; the B figure below may include its forced mutation.";
+};
 private _during = ["B browser open, idle"] call _sampleFps;
 
 // what the control actually is, in pixels, vs what the page thinks it has
@@ -77,17 +98,41 @@ private _pos = ctrlPosition _ctrl;             // [x, y, w, h] in UI coords
 // (it once printed a 3880px control on a 3440px screen). Divide by safeZone.
 diag_log format ["[WEBUI-BENCH] screen %1x%2  uiScale %3  safeZone %4x%5  control %6 x %7 px  (UI w=%8 h=%9)",
     _res select 0, _res select 1, _res select 5,
-    safeZoneW toFixed 4, safeZoneH toFixed 4,
-    round (((_pos select 2) / safeZoneW) * (_res select 0)),
+    safeZoneWAbs toFixed 4, safeZoneH toFixed 4,
+    // safeZoneWAbs, not safeZoneW: getResolution's width spans ALL monitors,
+    // while safeZoneW spans only the centre one, so pairing them reported a
+    // control 3x too wide on a triple-head setup. The BIKI notes safezoneWAbs
+    // "is same as safezoneW" on a single monitor, so this is a no-op there.
+    round (((_pos select 2) / safeZoneWAbs) * (_res select 0)),
     round (((_pos select 3) / safeZoneH) * (_res select 1)),
     (_pos select 2) toFixed 4, (_pos select 3) toFixed 4];
 
+// `metrics` is registered only by ui/demo.html, so on any other page this call
+// times out and returns nil -- and formatting a nil in a SCHEDULED context
+// raises "Undefined variable in expression" rather than printing "any" (BIKI,
+// nil). That abort killed the rest of the run: closeDialog, the A' recovery
+// sample and the whole A/B/A verdict never happened, and nothing said the run
+// had been truncated. The operator got two orphan "mean N fps" lines.
 private _m = [_ctrl, "metrics", [], 8] call webui_fnc_call;
+if (isNil "_m") then { _m = "no 'metrics' handler on this page (only ui/demo.html registers one)"; };
 diag_log format ["[WEBUI-BENCH] page metrics: %1", _m];
 
 // A': closed again -- if this does not come back to baseline, the browser was
 // not what cost the frames
+// closeDialog only closes a DIALOG. A browser control commonly lives in an
+// RscTitles overlay -- this repo's own awaitPage and bootProbe say so, and the
+// CT_WEBBROWSER wiki's HUD example does exactly that -- and Esc does not close
+// those either. So this could close nothing, the A' sample would measure the
+// browser still painting, and the A/B/A verdict would be computed and printed
+// from three samples of the same state. Verify the control is actually gone,
+// and refuse to publish a verdict if it is not.
 closeDialog 0;
+private _closeBy = diag_tickTime + 3;
+waitUntil { uiSleep 0.25; isNull _ctrl || { diag_tickTime > _closeBy } };
+if (!isNull _ctrl) exitWith {
+    diag_log "[WEBUI-BENCH] ABORT: the browser control is still alive after closeDialog -- it is probably in an RscTitles overlay, which closeDialog cannot close. Close the page by hand and rerun; no A/B/A verdict without a real A' sample.";
+    systemChat "bench ABORTED -- could not close the page (see RPT)";
+};
 uiSleep 2;
 private _after = ["A' closed again"] call _sampleFps;
 

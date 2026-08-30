@@ -14,7 +14,12 @@
   body{
     background:var(--bg); color:var(--ink);
     font:400 clamp(12px,1.15vw,16px)/1.5 system-ui,sans-serif;
-    display:flex; align-items:center; justify-content:center; padding:2vh 2vw;
+    /* align-items:flex-start, not center: a centred flex item taller than the
+       viewport overflows EQUALLY in both directions, and the overflow above the
+       top edge cannot be scrolled to -- so on a short browser control the pill
+       and the first tile row were simply unreachable. */
+    display:flex; align-items:flex-start; justify-content:center;
+    padding:2vh 2vw; overflow-y:auto;
   }
   .card{
     width:min(760px,94vw); background:var(--panel);
@@ -62,7 +67,7 @@ if (typeof A3API !== "undefined" && A3API.RequestFile) {
     <div class="tile"><div class="k">Resolution</div><div class="v" id="res">—</div></div>
     <div class="tile"><div class="k">FPS</div><div class="v big" id="fps">—</div>
       <div class="bar"><i id="fpsbar"></i></div></div>
-    <div class="tile"><div class="k">Pushes received</div><div class="v big" id="ticks">0</div></div>
+    <div class="tile"><div class="k">Pushes received</div><div class="v big" id="ticks">—</div></div>
   </div>
 
   <div class="grid" style="margin-top:.8em">
@@ -106,9 +111,9 @@ if (typeof A3API !== "undefined" && A3API.RequestFile) {
     <div class="grid" style="margin-top:.5em">
       <button onclick="t('ping')">JS &rarr; SQF call</button>
       <button onclick="askDemo()">JS &rarr; SQF bool (ask)</button>
-      <button onclick="t('callPage')">SQF &rarr; JS call</button>
+      <button onclick="sqfOnly('SQF &rarr; JS call', '[_ctrl, &quot;pageState&quot;, [&quot;hi&quot;]] call webui_fnc_call')">SQF &rarr; JS call</button>
       <button onclick="texDemo()">RequestTexture (.paa)</button>
-      <button onclick="t('freeze')">StopBrowser 3s</button>
+      <button onclick="sqfOnly('StopBrowser / ResumeBrowser', '[_ctrl, false] call webui_fnc_freeze;  // then [_ctrl, true] to resume')">Freeze / resume</button>
     </div>
     <div class="v" id="capout" style="margin-top:.5em">—</div>
     <img id="tex" style="margin-top:.5em;max-height:96px;display:none">
@@ -154,7 +159,13 @@ async function doPrompt(){
 /* --- v2 demos ----------------------------------------------------------- */
 async function askDemo(){
   var o = el('capout');
-  try { var v = await WEBUI.ask('isCop', []); o.textContent = 'WEBUI.ask("isCop") -> ' + v + '   (one round trip, no ExecJS leg)'; }
+  /* NOTE: `isCop` is not registered by the library -- it is a stand-in for a
+     mission verb. An unregistered ask is answered `false` by fn_init, which is
+     indistinguishable from a real `false`, so the label says which is which
+     rather than presenting a rejection as an answer. Register one to see a true:
+       [_ctrl, "isCop", { true }] call webui_fnc_on; */
+  try { var v = await WEBUI.ask('isCop', []); o.textContent = 'WEBUI.ask("isCop") -> ' + v +
+        '   (one round trip, no ExecJS leg. false may mean "not registered" — see the note in the source)'; }
   catch(e){ o.textContent = 'ask failed: ' + e.message; }
 }
 /* Probes every candidate path so one run settles which form RequestTexture
@@ -162,7 +173,18 @@ async function askDemo(){
    so length is the only signal. */
 async function texDemo(){
   var o = el('capout'), img = el('tex');
-  var root = (window.WEBUI && WEBUI.missionRoot) || '(none)';
+  /* Every other button on this page prints something when there is no bridge.
+     This one built its `cases` array with a bare WEBUI.missionRoot OUTSIDE the
+     per-case try, so with the whitelist misconfigured it threw ReferenceError,
+     the async function rejected, #capout stayed on an em dash and the button
+     looked inert — in precisely the scenario the demo exists to diagnose, and
+     the unhandled rejection could not even be reported because the reporter
+     lives in webui.js, which is exactly what is missing. */
+  if (!window.WEBUI) {
+    o.textContent = 'no bridge yet — webui.js never loaded. Check the CfgCommands whitelist and that webui_fnc_init ran on this control.';
+    return;
+  }
+  var root = WEBUI.missionRoot || '(none)';
   var cases = [
     ['mission-relative', 'icons\\myicon.paa'],
     ['mission root + rel', (WEBUI.missionRoot || '') + 'icons\\myicon.paa'],
@@ -209,6 +231,15 @@ function kbStat(){
     "\nactiveElement: " + (a ? (a.id || a.tagName) : "(null)") +
     "   hasFocus(doc): " + document.hasFocus();
 }
+/* KB_last holds the poller's baselines. They live out here, not inside
+   wireKb(), because kbReset() has to re-seed them: it clears the fields but
+   used to leave the poller comparing against the PRE-reset text, so within
+   250ms the poll saw ""  !== "abc", set pollSeen, and the report went to the
+   RPT as keydown=0 / input=0 / value="" / pollSawChange=true — "the field
+   changed with no events firing", which is exactly the signature that would
+   justify a new, wrong FINDINGS 2. A reset button must not manufacture the
+   defect the tile exists to detect. */
+var KB_last = { v: "", c: "" };
 function kbReset(){
   KB = { keydown:0, keyup:0, keypress:0, beforeinput:0, input:0, composition:0,
          ceInput:0, lastKey:"", pollSeen:false };
@@ -216,6 +247,8 @@ function kbReset(){
   el('kbout').textContent = "input.value: (empty)";
   el('kbce2').textContent = "contenteditable.textContent: (unchanged)";
   el('kbpoll').textContent = "poll: no value change seen yet";
+  KB_last.v = el('kbin').value;          // re-seed, or the next poll fires on our own clear
+  KB_last.c = el('kbce').textContent;
   kbStat();
 }
 (function wireKb(){
@@ -236,15 +269,15 @@ function kbReset(){
     if (e.target !== i) { KB.keydown++; KB.lastKey = e.key + " (doc)"; kbStat(); }
   });
   // polled read: catches a field that fills without ever firing an event
-  var lastV = "", lastC = c.textContent;
+  KB_last.v = i.value; KB_last.c = c.textContent;
   setInterval(function(){
-    if (i.value !== lastV){
-      lastV = i.value; KB.pollSeen = true;
-      el('kbpoll').textContent = "poll: input.value changed to " + JSON.stringify(lastV);
+    if (i.value !== KB_last.v){
+      KB_last.v = i.value; KB.pollSeen = true;
+      el('kbpoll').textContent = "poll: input.value changed to " + JSON.stringify(KB_last.v);
     }
-    if (c.textContent !== lastC){
-      lastC = c.textContent; KB.pollSeen = true;
-      el('kbpoll').textContent = "poll: contenteditable changed to " + JSON.stringify(lastC);
+    if (c.textContent !== KB_last.c){
+      KB_last.c = c.textContent; KB.pollSeen = true;
+      el('kbpoll').textContent = "poll: contenteditable changed to " + JSON.stringify(KB_last.c);
     }
   }, 250);
   kbStat();
@@ -265,6 +298,20 @@ function kbReport(){
 }
 
 function clog(m){ var e=el('callog'); if(e.textContent==='—')e.textContent=''; e.textContent+=m+'\n'; e.scrollTop=e.scrollHeight; }
+/* Two of the four directions cannot be started from the page: an SQF -> JS call
+   and StopBrowser both originate in SQF. These buttons used to call t('callPage')
+   and t('freeze') -- names no SQF in this library registers -- so both produced
+   "unknown method" and were indistinguishable from the adjacent "blocked call"
+   button. Worse, the first was labelled "SQF -> JS call" while t() is a JS -> SQF
+   call, i.e. it demonstrated the opposite direction to its own label.
+   Show the SQF line to run instead, and let the result land in #capout via the
+   pageState handler below. */
+function sqfOnly(what, snippet){
+  var o = el('capout');
+  o.textContent = what + ' is SQF-initiated. Run in the debug console:  ' + snippet;
+  clog(what + ' -- run from SQF: ' + snippet);
+}
+
 async function t(name){
   if(!window.WEBUI){ clog('no WEBUI yet'); return; }
   var t0=performance.now();
@@ -287,7 +334,12 @@ setTimeout(function () {
 
 window.WEBUIReady.then(function (WEBUI) {
     booted = true;
-    const p = el('state'); p.textContent = 'bridge live (4-way)'; p.className = 'pill live';
+    /* WEBUIReady resolving proves webui.js loaded IN THE PAGE. It does not prove
+       SQF can be reached -- that needs a round trip. Claiming "4-way" here made
+       the pill go green on an install whose JSDialog handler was missing, which
+       is precisely the half this page exists to test. Go amber now, green in the
+       auto-ping's .then below. */
+    const p = el('state'); p.textContent = 'page up, waiting for SQF…'; p.className = 'pill';
 
     /* Exposed to SQF for webui_fnc_bench: what viewport does the page
        ACTUALLY get? "fixed 1200x600 regardless of resolution" was inferred
@@ -309,23 +361,59 @@ window.WEBUIReady.then(function (WEBUI) {
       el('capout').textContent = 'SQF called into the page with ' + JSON.stringify(tag);
       return { scrolled: window.scrollY, logLines: el('callog').textContent.split('\n').length, tag: tag || null };
     });
-    WEBUI.call('ping',['boot']).then(function(r){ clog('auto ping -> '+JSON.stringify(r)); })
-                            .catch(function(e){ clog('auto ping !! '+e.message); });
+    WEBUI.call('ping',['boot']).then(function(r){
+      clog('auto ping -> '+JSON.stringify(r));
+      var q = el('state'); q.textContent = 'bridge live (4-way)'; q.className = 'pill live';
+    }).catch(function(e){
+      clog('auto ping !! '+e.message);
+      var q = el('state'); q.textContent = 'page up, SQF unreachable'; q.className = 'pill';
+    });
 
+    /* Seed the tiles from the handlers fn_init registers for every control, so
+       this panel is populated on any correct install with no mission-side code.
+       It used to be driven ONLY by the three push channels below, which nothing
+       in the library ever sends -- so on a perfectly good install every tile
+       sat on an em dash and the panel read as a broken push direction. */
+    WEBUI.call('playerInfo').then(function (v){
+      if (!Array.isArray(v)) return;
+      el('pname').textContent = v[0]; el('puid').textContent = v[1];
+      if (v.length > 2) el('pside').textContent = v[2];
+    }).catch(function (e){ clog('playerInfo !! ' + e.message); });
+
+    WEBUI.call('screenSize').then(function (v){
+      if (Array.isArray(v)) el('res').textContent = v[0] + ' × ' + v[1];
+    }).catch(function (e){ clog('screenSize !! ' + e.message); });
+
+    /* Counts the three demonstration channels below, and only those -- there is
+       no all-channel hook, so a push on any other channel does not tick it.
+       It was a hardcoded "0" in the markup until 2026-08-29, which read as a
+       measurement saying no pushes had arrived. */
+    var pushCount = 0;
+    function countPush(){ el('ticks').textContent = String(++pushCount); }
+
+    /* The three channels below are OPTIONAL and are not sent by the library --
+       they demonstrate the push direction when the mission feeds them, e.g.
+
+         [_ctrl, "player", [name player, getPlayerUID player, str side player]] call webui_fnc_push;
+         [_ctrl, "screen", (getResolution select [0,2])] call webui_fnc_push;
+         [_ctrl, "fps",    diag_fps] call webui_fnc_push;                        */
     WEBUI.on('player', function (v){
+      countPush();
       if (!Array.isArray(v)) return;
       el('pname').textContent = v[0]; el('puid').textContent = v[1]; el('pside').textContent = v[2];
     });
 
     WEBUI.on('screen', function (v){
+      countPush();
       if (Array.isArray(v)) el('res').textContent = v[0] + ' × ' + v[1];
     });
 
-    WEBUI.on('tick', function (v){
-      if (!Array.isArray(v)) return;
-      el('ticks').textContent = v[0];
-      el('fps').textContent   = v[1];
-      el('fpsbar').style.width = Math.max(0, Math.min(100, (v[1] / 120) * 100)) + '%';
+    WEBUI.on('fps', function (v){
+      countPush();
+      var n = Array.isArray(v) ? v[0] : v;
+      if (typeof n !== 'number') return;
+      el('fps').textContent   = n.toFixed(0);
+      el('fpsbar').style.width = Math.max(0, Math.min(100, (n / 120) * 100)) + '%';
     });
 });
 </script>

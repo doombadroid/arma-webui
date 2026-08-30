@@ -29,7 +29,13 @@ Measured on a real screen: 33 app icons cost **726 KB** as `.paa` against
 against **227 bytes** of custom properties.
 
 `.paa` still wins for photographs, and it is the only option for world surfaces
-and anything drawn over gameplay.
+— a texture on an object, a sign, a screen in the world.
+
+It is **not** the only option for drawing over gameplay: FINDINGS 8 measured a
+transparent page over the world (`colorBackground[] = {0,0,0,0}` on the control
+plus `background: transparent` in the page), which is how a HUD-style overlay is
+built. That is an RscTitles layer, not a dialog, so remember Esc does not close
+it and `closeDialog` does not either.
 
 ## Requirements
 
@@ -37,8 +43,17 @@ Arma 3 **2.20+** for `CT_WEBBROWSER`, **2.18+** for `toJSON`/`fromJSON`.
 
 ## Install
 
-1. Copy `functions/`, `diagnostics/` and `ui/webui.js` into your mission, e.g.
-   `<mission>\webui\`.
+1. Copy `functions/` and `diagnostics/` into your mission, e.g.
+   `<mission>\webui\`. Copy the **pages** — `ui/webui.js`, and `ui/demo.html`
+   / `ui/probe.html` if you want them — to `<mission>\ui\html\`, which is
+   both the path the whitelist in step 3 covers and the default `webui.js`
+   location the two boot paths look in. If you put `webui.js` anywhere else,
+   set `WEBUI_jsPath` before the first `webui_fnc_init` **and** change the path
+   inside the step-6 stub to match — they are two separate copies of it:
+
+   ```sqf
+   WEBUI_jsPath = "webui\ui\webui.js";   // wherever you actually put it
+   ```
 2. `#include` `config/CfgFunctions.hpp` inside your `CfgFunctions`.
 3. `#include` `config/CfgCommands.hpp` in `description.ext`. **Without the
    whitelist nothing works and it fails silently.**
@@ -80,8 +95,14 @@ if (typeof A3API !== "undefined" && A3API.RequestFile) {
 Then `window.WEBUIReady.then(function (WEBUI) { ... })` — do not poll for
 `window.WEBUI`.
 
-`ui/demo.html` is a working page that exercises every direction; point a control
-at it to check an install.
+`ui/demo.html` is a working page that exercises the bridge; point a control at
+it — as `ui\html\demo.html`, so the step-3 whitelist covers it — to check an
+install. Two of the four directions (an SQF→JS call, and freeze/resume) start in
+SQF and cannot be triggered from the page; the demo prints the line to run
+instead. The `player` / `screen` / `fps` push channels are demonstration
+channels the library does not send: the panel populates from `playerInfo` and
+`screenSize` on its own, and feeding those three channels from SQF is what
+exercises the push direction.
 
 ## API
 

@@ -48,8 +48,9 @@
         'message'    the page's own code spoke first.
         'pageloaded' the engine's load event was caught.
         'timer'      BROKEN. Nothing reached the page for 3 full seconds and the
-                     queue drained on the backstop -- and a drain on that path
-                     discards what it drains. Check allowedHTMLLoadURIs covers
+                     readiness fell to the backstop. The queue is HELD on that
+                     path, not drained -- nothing is lost, but nothing arrives
+                     until the bridge announces itself. Check allowedHTMLLoadURIs covers
                      the page's path. Then check whether SQF's injector died:
                      in the RPT, an "[WEBUI] inject: loadFile ..." line with NO
                      "inject: webui.js N bytes" line after it means loadFile was
@@ -104,7 +105,7 @@ if (isNull _ctrl || { _ctrl isEqualTo _before }) exitWith {
 private _deadline = diag_tickTime + 4;
 waitUntil {
     uiSleep 0.1;
-    isNull _ctrl || { _ctrl getVariable ["webui_ready", false] } || { diag_tickTime > _deadline }
+    isNull _ctrl || { _ctrl getVariable ["webui_bridge", false] } || { diag_tickTime > _deadline }
 };
 if (isNull _ctrl) exitWith { diag_log "[WEBUI-BOOT] control went away"; false };
 
@@ -127,22 +128,44 @@ waitUntil {
 
 // ------------------------------------------------------------------ report --
 private _ready   = _ctrl getVariable ["webui_ready", false];
+private _bridge  = _ctrl getVariable ["webui_bridge", false];
 private _signal  = _ctrl getVariable ["webui_readySignal", "none"];
 private _initAt  = _ctrl getVariable ["webui_initAt", -1];
 private _readyAt = _ctrl getVariable ["webui_readyAt", -1];
-private _delta   = if (_initAt >= 0 && _readyAt >= 0) then { _readyAt - _initAt } else { -1 };
+// "to first data" must be measured to the BRIDGE, not to the page load: the two
+// differ by exactly the boot delay this probe exists to report, so using readyAt
+// printed OK for the failure it was written to catch.
+private _bridgeAt = _ctrl getVariable ["webui_bridgeAt", -1];
+private _delta   = if (_initAt >= 0 && _bridgeAt >= 0) then { _bridgeAt - _initAt } else { -1 };
+private _pageDelta = if (_initAt >= 0 && _readyAt >= 0) then { _readyAt - _initAt } else { -1 };
 private _facts   = uiNamespace getVariable ["WEBUI_bootFacts", []];
 
 private _path = "unknown (page never answered)";
-if (count _facts >= 1) then { _path = _facts select 0; };
+if (count _facts >= 1) then {
+    _path = _facts select 0;
+    // ESCAPE IT. _path comes from the PAGE (WEBUI.bootPath) and is interpolated
+    // into structured-text markup below, then handed to parseText/hint. An "&"
+    // or "<" in it makes the parse fail and blanks this probe's only on-screen
+    // output -- the artifact HANDOFF_TEST asks a third party to screenshot --
+    // and markup in it would be injected into a native Arma UI element.
+    // & first, or the escapes introduced after it get escaped again.
+    _path = _path regexReplace ["&", "&amp;"];
+    _path = _path regexReplace ["<", "&lt;"];
+    _path = _path regexReplace [">", "&gt;"];
+};
 
 // The verdict is the point. Anything that is not a fast 'hello'/'pageloaded'/
 // 'message' is a real finding, so say so rather than printing numbers and
 // leaving the reader to know what good looks like.
 private _answered = (count _facts >= 1);
 private _verdict = switch (true) do {
-    case (!_ready):                    { "BROKEN -- the bridge never reached the page" };
-    case (_signal isEqualTo "timer"):  { "BROKEN -- drained on the 3s backstop, nothing reached the page" };
+    case (!_ready):                    { "BROKEN -- the page never even loaded" };
+    // The page loaded but window.WEBUI never announced itself. Distinct from
+    // the line above and far more common: the document renders perfectly, so
+    // this is the "shows but never populates" install. The queue is being HELD,
+    // not lost, so whatever is pushed will arrive if the bridge ever appears.
+    case (!_bridge):                   { "BROKEN -- page loaded, but the bridge never appeared (check the whitelist and the step-6 stub)" };
+    case (_signal isEqualTo "timer"):  { "BROKEN -- 3s backstop: nothing reached the page. The queue is HELD, not lost -- it drains if the bridge ever announces itself" };
     // Readiness marked but the page never answered the fact probe: the bridge
     // was declared up without actually landing. Printing "OK" here would be the
     // worst possible answer, so it is called out on its own.
@@ -150,7 +173,10 @@ private _verdict = switch (true) do {
     // A control from a build predating this diagnostic has no webui_initAt, so
     // _delta is -1. Without this the default branch prints "OK -- -1.00s".
     case (_delta < 0):                 { "UNKNOWN -- this build records no init timestamp" };
-    case (_delta > 0.25):              { format ["SLOW -- %1s to first data", _delta toFixed 2] };
+    // 0.40, not 0.25: FINDINGS 10's measured healthy range is 0.20-0.39s, and
+    // INSTALL.md quotes the same band, so a 0.25 trip point called a healthy
+    // client SLOW and disagreed with the document it sends the reader to.
+    case (_delta > 0.40):              { format ["SLOW -- %1s to first data", _delta toFixed 2] };
     default                            { format ["OK -- %1s to first data", _delta toFixed 2] };
 };
 
@@ -177,7 +203,7 @@ private _txt = format [
     "<t size='1.1' color='#c9e21a'>WEBUI BOOT PROBE</t><br/>"
   + "<t color='#dfe8f0'>%1</t><br/><br/>"
   + "ready signal: <t color='#38e1c4'>%2</t><br/>"
-  + "init -> ready: <t color='#38e1c4'>%3 s</t><br/>"
+  + "init -> bridge: <t color='#38e1c4'>%3 s</t><br/>"
   + "page boot path: <t color='#38e1c4'>%4</t><br/>"
   + "A3API bound: <t color='#38e1c4'>%5</t>%6",
     _verdict, _signal,
@@ -188,7 +214,12 @@ private _txt = format [
 ];
 
 hint parseText _txt;
-diag_log format ["[WEBUI-BOOT] %1 | signal=%2 delta=%3s bootPath=%4 facts=%5",
-    _verdict, _signal, if (_delta >= 0) then { _delta toFixed 3 } else { "n/a" }, _path, _facts];
+diag_log format ["[WEBUI-BOOT] %1 | signal=%2 init->bridge=%3s init->pageload=%4s bootPath=%5 facts=%6",
+    _verdict, _signal,
+    if (_delta >= 0) then { _delta toFixed 3 } else { "n/a" },
+    if (_pageDelta >= 0) then { _pageDelta toFixed 3 } else { "n/a" },
+    _path, _facts];
+
+[_ctrl, "__bootFacts"] call webui_fnc_off;
 
 [_verdict, _signal, _delta, _path]

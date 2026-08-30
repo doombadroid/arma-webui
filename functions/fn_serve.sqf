@@ -48,10 +48,32 @@
     trust decision, not a transport detail:
 
       - The host's fetcher MUST be server-authoritative and MUST NOT accept
-        markup relayed from another client. Wire the remoteExec entry so only
-        the server can reach the receiving client (allowedTargets = 1); a
-        client-to-client path here is arbitrary script execution inside a
-        document that holds A3API.
+        markup relayed from another client. A client-to-client path here is
+        arbitrary script execution inside a document that holds A3API: the
+        markup reaches WEBUI._serve, which uses document.write precisely
+        BECAUSE it executes inline scripts, in a window still holding the
+        A3API binding (RequestFile, RequestPreprocessedFile, and SendAlert
+        into every handler registered on that control).
+
+        ENFORCE THE ORIGIN INSIDE THE RECEIVING FUNCTION. No CfgRemoteExec
+        key restricts the SENDER. allowedTargets is "which machine can be
+        REACHED by it" (BIKI, Arma 3: CfgRemoteExec) -- a constraint on the
+        destination, silent about who sent it. An earlier version of this
+        block prescribed `allowedTargets = 1` as the server-only mitigation.
+        That value means "can only target clients": it is exactly what
+        PERMITS one client to deliver markup to another, and under `mode = 1`
+        adding the entry is what GRANTS the permission it was meant to
+        withhold. Inert as a defence, and harmful as advice.
+
+        The check that works is an origin test in the receiver, because the
+        server's machine network ID is 2:
+
+            if (remoteExecutedOwner != 2) exitWith {};   // not from the server
+
+        remoteExecutedOwner returns 0 outside a remote-executed context and
+        the sender's id otherwise (BIKI, 1.70). Keep allowedTargets for what
+        it actually does -- limiting where the entry may run -- never as a
+        sender restriction.
       - This never evaluates what it receives as SQF, and never compiles it.
         It is treated as opaque bytes and handed to the page.
 
@@ -68,7 +90,14 @@
 
     _have is what the client already has for that page (a version tag, "" if
     unknown), so a host that tracks versions can answer "unchanged" cheaply
-    instead of shipping bytes on every open.
+    instead of shipping bytes on every open. Answer with [] or "" for
+    "unchanged"; answer [_markup] or [_markup, _version] to ship a new build,
+    and the version comes back as _have on the next open.
+
+    A cached override is applied immediately on open AND revalidated against the
+    host in the same call, so editing a page on the server and restarting the
+    mission reaches clients that already opened that screen. The cache lives in
+    missionNamespace for exactly that reason.
 
     THE CALLBACK IS SAFE TO HOLD AND CALL LATER, from any scope -- a spawn, a
     remoteExec'd handler, a network reply minutes afterwards. That is the point
@@ -94,11 +123,17 @@ if (_fetcher isEqualTo {}) exitWith { false };
 if !(missionNamespace getVariable ["webui_serveEnabled", true]) exitWith { false };
 
 // ---------------------------------------------------------------- cache
-// Per session, keyed by page id. An override that has already arrived is
-// reapplied locally on the next open with no server round trip, so repeatedly
-// opening a screen costs one fetch, not one per open.
-private _cache = uiNamespace getVariable ["webui_serveCache", createHashMap];
-uiNamespace setVariable ["webui_serveCache", _cache];
+// Keyed by page id, holding [markup, version].
+//
+// missionNamespace, NOT uiNamespace: uiNamespace has GAME-session lifetime, so
+// a cache that lived there and was never invalidated meant a page could be
+// fetched at most once per launch of Arma. Editing a page on the server and
+// restarting the mission -- the entire point of this file -- changed nothing
+// for any client that had already opened that screen; they had to quit the game
+// to see it. Leaving server A for server B with a shared page id served A's
+// markup on B and never asked B.
+private _cache = missionNamespace getVariable ["webui_serveCache", createHashMap];
+missionNamespace setVariable ["webui_serveCache", _cache];
 
 private _apply = {
     params ["_c", "_markup"];
@@ -112,12 +147,36 @@ private _apply = {
     // all of it, and reusing push's exact path means _serve decodes through the
     // same UTF-8-aware helper that every other channel already proves works.
     private _b64 = _c ctrlWebBrowserAction ["ToBase64", toJSON _markup];
-    [_c, format ["window.WEBUI && WEBUI._serve('%1');", _b64]] call webui_fnc_exec;
+    // HONOUR THE TRANSPORT'S ANSWER. exec returns false and delivers nothing
+    // when the queue is at its cap -- the state a control reaches after a long
+    // freeze. Stamping regardless recorded an override the page never received,
+    // and the redundancy guard then skipped the delivery that would have fixed it.
+    private _sent = [_c, format ["window.WEBUI && WEBUI._serve('%1');", _b64]] call webui_fnc_exec;
+    if (!_sent) exitWith {
+        diag_log "[WEBUI] serve: exec refused the override (queue full) -- NOT stamping; it will be retried on the next open";
+        false
+    };
+    // Stamp what this control actually has. The redundancy guard reads it, and
+    // webui_fnc_freeze reads the page id to re-apply the override after a
+    // resume -- ResumeBrowser renavigates the frame back to the PBO page, so an
+    // override that is not re-applied is silently reverted.
+    _c setVariable ["webui_serveApplied", _markup];
     true
 };
 
-private _hit = _cache getOrDefault [_pageId, ""];
-if (_hit isNotEqualTo "") exitWith { [_ctrl, _hit] call _apply };
+// A hit is applied at once so there is no flash of the PBO page, but it no
+// longer ENDS the call: the fetch below still runs, carrying the cached version
+// as _have, so the host can answer "unchanged" cheaply or ship a newer build.
+// Exiting here was what made the cache permanent and the documented _have
+// mechanism unreachable.
+_ctrl setVariable ["webui_servePageId", _pageId];
+private _hit = _cache getOrDefault [_pageId, []];
+private _have = "";
+if (_hit isNotEqualTo []) then {
+    _hit params ["_hitMarkup", ["_hitVersion", ""]];
+    _have = _hitVersion;
+    [_ctrl, _hitMarkup] call _apply;
+};
 
 // ---------------------------------------------------------------- fetch
 // The host's fetcher is asynchronous and may never answer -- a server that is
@@ -153,16 +212,33 @@ private _recv = {
 
     // The documented call is [_markup] call _cb, but a host that passes the
     // bare string is not doing anything unreasonable -- accept both rather than
-    // fail on a detail no compiler checks.
+    // fail on a detail no compiler checks. A second element, if present, is the
+    // version tag to send back as _have on the next open.
     private _markup = "";
+    private _version = "";
     if (_args isEqualType []) then {
         if (count _args > 0) then { _markup = _args select 0 };
+        if (count _args > 1 && { (_args select 1) isEqualType "" }) then { _version = _args select 1 };
     } else { _markup = _args };
     if !(_markup isEqualType "") exitWith {};
-    if (_markup isEqualTo "") exitWith {};        // "nothing to serve" is normal
+    if (_markup isEqualTo "") exitWith {};        // "unchanged"/"nothing to serve" is normal
 
-    private _cc = uiNamespace getVariable ["webui_serveCache", createHashMap];
-    _cc set [_pid, _markup];
+    private _cc = missionNamespace getVariable ["webui_serveCache", createHashMap];
+    _cc set [_pid, [_markup, _version]];
+    missionNamespace setVariable ["webui_serveCache", _cc];
+
+    // Skip a redundant rewrite ONLY when THIS CONTROL already has this markup.
+    //
+    // The guard used to compare against the page-id cache, which is shared by
+    // every in-flight ticket for that page -- so a cache entry written by a
+    // different serve made this one skip, and the control that had received
+    // nothing kept the PBO page for the whole of that open while the RPT logged
+    // "unchanged". Two live controls on one page id, or a close-and-reopen
+    // inside the fetch latency, both hit it. The applied markup is stamped on
+    // the control by _apply, so ask the control.
+    if ((_c getVariable ["webui_serveApplied", ""]) isEqualTo _markup) exitWith {
+        diag_log format ["[WEBUI] serve: '%1' unchanged for this control, keeping the applied document", _pid];
+    };
     [_c, _markup] call _applyFn;
 };
 uiNamespace setVariable ["webui_serveRecv", _recv];
@@ -192,5 +268,5 @@ private _cb = compile format
     };
 };
 
-[_pageId, "", _cb] call _fetcher;
+[_pageId, _have, _cb] call _fetcher;
 true

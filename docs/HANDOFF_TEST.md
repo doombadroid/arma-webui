@@ -22,22 +22,39 @@ It arms and waits up to 60 s. **Now open any web screen.** The test attaches to
 that page, exercises the bridge, and prints a hint with a PASS/FAIL line per
 check plus a verdict banner.
 
-Run it a second time against a page that includes `prompt_overlay.hpp`, or the
-prompt checks report SKIP rather than PASS — see the note under check 8.
+Run it against a page whose dialog includes `prompt_overlay.hpp`. Without it the
+five prompt checks report **SKIP**, and the banner says so — `8 of 8 checks
+passed, 5 SKIPPED` is not the same result as `13 of 13`, and the difference is
+visible in the screenshot. The same five SKIP if a prompt is already open when
+the test runs: driving the overlay while a player is typing into it would
+overwrite their text and could hang the prompt, so the test declines.
+
+Note that `fn_prompt` resolves its overlay from the control it is *given* —
+`webui_fnc_init`'s `promptText` handler passes the control the page called
+through — and falls back to `uiNamespace WEBUI_ctrl` only when no control is
+named. The self-test does not pass one, so its prompt checks resolve through
+that fallback: with more than one browser control live they may target a
+different dialog than the page under test. The test
+logs a note to the RPT when those two differ.
 
 ### What each check means, and what a failure points at
 
+Names below are the literal strings the test prints; thirteen checks in total.
+
 | check | proves | if it fails |
 |---|---|---|
-| bridge is up | `webui_ready` was set | precondition 1 or 2 — whitelist, or `webui_fnc_init` never called |
+| bridge is up | `webui_bridge` was set — `window.WEBUI` provably announced itself, not merely that the document loaded (`webui_ready`) | precondition 1 or 2 — whitelist, or `webui_fnc_init` never called; also the step-6 stub, if the page loaded but the bridge never arrived |
 | readiness did not fall to the 3s backstop | a real signal won | the boot delay is back; read the `[WEBUI]` lines in the RPT |
-| readiness inside 1s | it was fast, not just eventual | see FINDINGS 10; healthy is 0.03–0.4 s |
-| page → SQF call arrives | JSDialog handler + page can reach it | the page has no `A3API`, so it is not on a whitelisted path |
-| SQF → page push lands | the queue drained into a document that really has the bridge | the page renders but the bridge is not in it |
-| boot path is known | `WEBUI.bootPath` reported | webui.js is older than this test |
+| bridge up inside 1s | the *bridge* landed fast, not just the document | see FINDINGS 10; healthy is 0.20–0.39 s. The detail line also prints when the page itself loaded, which is earlier |
+| page -> SQF call arrives | JSDialog handler + page can reach it | the page has no `A3API`, so it is not on a whitelisted path |
+| SQF -> page push lands | the queue drained into a document that really has the bridge | the page renders but the bridge is not in it |
+| boot path is reported | `WEBUI.bootPath` reported | webui.js is older than this test |
 | serve callback survives an async fetcher | the closure fix holds | **regression** — `fn_serve`'s callback is reaching for locals again |
-| prompt refuses re-entry while busy | one overlay, one prompt | **regression** — concurrent prompts can release each other |
-| prompt generation not consumed by a refusal | stale presses cannot cross prompts | as above |
+| prompt refuses re-entry while busy | one overlay, one prompt | **regression** — concurrent prompts can release each other. A `BLOCKED` detail means the busy guard is gone entirely and `fn_prompt` sat on its own untimed wait |
+| refused prompt leaves the running prompt's field alone | a refusal does not touch the overlay it declined to take | **regression** — the seeding moved back above the busy guard, so a refused prompt overwrites the running prompt's field and that prompt returns the wrong answer |
+| prompt generation untouched by a refusal | stale presses cannot cross prompts | as above |
+| prompt generation is always initialised | `fn_prompt` defines the generation whatever happens | **regression** — `prompt_overlay.hpp`'s button handler will throw mid-click on an undefined generation |
+| stale busy latch is cleared, not obeyed | a prompt killed mid-wait by a mission end does not disable prompts for the rest of the game session | **regression** — `WEBUI_promptBusy` lives in `uiNamespace` (game-session lifetime) and only mission-scope code clears it, so without the owner check a stranded latch makes every later prompt return `null`, which the API defines as "cancelled" |
 | exec queue is not backed up | nothing is flooding `webui_fnc_exec` | something pushes while the page is down — see the frozen-page case |
 
 **Green means the automated surface is clean.** It does not mean the UI looks
@@ -60,8 +77,12 @@ right; nothing here renders anything.
 
 ### a. The volume slider
 
-`radioVolume` only moves when a person moves it, which is exactly how it went
-unwatched for so long.
+Only a human moving the slider can confirm this one, which is exactly how it
+went unwatched for so long — and why it was wrong. The value that tracks the
+Radio slider is `getAudioOptionVolumes select 2`; `radioVolume` is the *scripted*
+fade coefficient and does not move with the slider at all. `webui_fnc_volumeSlave`
+pushes the product of the two, per `fadeMusic`'s "Final Volume = Client Setting ×
+Scripted Volume".
 
 ```sqf
 [_ctrl] spawn webui_fnc_volumeSlave;

@@ -34,15 +34,38 @@ if (isNull _ctrl) exitWith { false };
 private _resetReadyClock = {
     params ["_c"];
     _c setVariable ["webui_ready", false];
+    // ResumeBrowser renavigates the frame, so window.WEBUI is destroyed and
+    // rebuilt from scratch. Without clearing this, webui_fnc_exec would keep
+    // believing the bridge was live and send straight into a document that does
+    // not have one yet -- every statement silently short-circuiting on its own
+    // `window.WEBUI &&` guard.
+    _c setVariable ["webui_bridge", false];
     _c setVariable ["webui_initAt", diag_tickTime];
     _c setVariable ["webui_readyAt", nil];
     _c setVariable ["webui_readySignal", nil];
+    _c setVariable ["webui_bridgeAt", nil];
 };
 
 if (_resume) then {
     [_ctrl] call _resetReadyClock;                 // PageLoaded will set it again
     _ctrl ctrlWebBrowserAction ["ResumeBrowser"];
     diag_log "[WEBUI] browser resumed";
+
+    // RE-APPLY ANY SERVE OVERRIDE. ResumeBrowser renavigates the frame, which
+    // loads the control's url= -- the PBO page. A webui_fnc_serve override lives
+    // only in the document that was just destroyed, so without this the screen
+    // silently reverts to the baseline markup and stays there, with nothing in
+    // the RPT to say an override had ever been applied.
+    //
+    // The stamp is cleared first or fn_serve's redundancy guard would see the
+    // pre-freeze markup on the control and skip. The re-apply goes through
+    // webui_fnc_exec, so it waits for the bridge like any other statement.
+    private _servedId = _ctrl getVariable ["webui_servePageId", ""];
+    if (_servedId isNotEqualTo "") then {
+        _ctrl setVariable ["webui_serveApplied", ""];
+        diag_log format ["[WEBUI] re-applying serve override '%1' after resume", _servedId];
+        [_ctrl, _servedId] call webui_fnc_serve;
+    };
 } else {
     _ctrl ctrlWebBrowserAction ["StopBrowser"];
     [_ctrl] call _resetReadyClock;

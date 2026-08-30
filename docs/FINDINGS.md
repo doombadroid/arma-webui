@@ -34,6 +34,23 @@ to ~2 fps", "a 60 Hz JS mutation cannot force a repaint", "no engine-side lever
 changes it" (`ctrlSetFocus`, `EachFrame ctrlCommit`, `EachFrame displayUpdate`
 and 30 Hz `ExecJS` were all measured on the clamped client).
 
+**`EachFrame displayUpdate` was never actually measured either.** `displayUpdate`
+only drives a *UI-on-texture* display; a browser control hosted the way this
+library documents it -- inside a dialog's `class controls`, or an RscTitles
+overlay -- has an ordinary parent display, so the pump issued a draw request
+against nothing and the phase resampled an idle control. `webui_fnc_forceProbe`
+now reports that phase as NOT APPLICABLE rather than printing a baseline as a
+result. Treat this lever as **unmeasured outside a ui2texture host**.
+
+**`EachFrame ctrlCommit` was never actually measured**, on either client. That
+phase of `webui_fnc_forceProbe` read its arguments off `_this`, but `EachFrame`
+carries no event data and passes its args in `_thisArgs`, so the handler threw
+at its first statement every frame and the control was never marked dirty. The
+phase sampled an untouched control and its baseline was recorded as a negative
+result for the lever. Fixed 2026-08-29; the phase has not been re-run, so this
+lever is currently **unmeasured, not disproven** -- do not cite it either way
+until a fresh forceProbe run says otherwise.
+
 ## 2. Typed text DOES reach the DOM
 
 Real `<input>`, `<textarea>` and `contenteditable` all work. Typing 25
@@ -90,6 +107,26 @@ mistake cannot be made silently again.
 
 The probe reports, per payload rung (1 KB / 64 KB / 512 KB / 4 MB), min /
 median / max over 20+ iterations:
+
+> **Two caveats on the numbers below, both found 2026-08-29.**
+>
+> 1. The `med=` figures were produced with an **upper**-median estimator
+>    (`sorted select floor(n/2)`), which on these n=20 runs is the 11th smallest
+>    rather than the midpoint of the 10th and 11th. The probe computes a true
+>    median now, so a fresh run reports slightly lower medians. Min and max are
+>    unaffected.
+>
+> 2. Every sample is a difference of two `diag_tickTime` reads, and that command
+>    is **single precision** — the BIKI states "the more time has past since
+>    restart the less precise the returned value will be". The step is
+>    ~0.24 ms after an hour of uptime, ~7.8 ms after a day, ~62 ms after a week.
+>    The uptime when these rows were captured was not recorded, so their true
+>    resolution is unknown; rows quoted to 0.1 ms may be quantisation. The probe
+>    now prints the live quantum before every run, warns above 1 ms, and reports
+>    a **bracketed mean** per leg and rung, whose error is one quantum divided by
+>    the iteration count. **Re-measure on a freshly started client before
+>    quoting these medians as fact.**
+
 
 | leg | direction | clock | what it includes |
 |---|---|---|---|
@@ -199,9 +236,23 @@ plays through the OS mixer. A muted player still hears the page.
 Also gesture-gated: an SQF-driven `play()` fails with `NotAllowedError` and the
 context sits `suspended`, because there was no user gesture. A click unlocks it.
 
-`webui_fnc_volumeSlave` reads `musicVolume` / `soundVolume` / `radioVolume` and
-pushes them so the page can multiply its own gain by them, with distance riding
-the same channel.
+`webui_fnc_volumeSlave` pushes the volumes so the page can multiply its own gain
+by them, with distance riding the same channel.
+
+**It does not read `musicVolume` / `soundVolume` / `radioVolume` for that, and a
+version of it that did never worked.** Those three return the *scripted fade*
+coefficient — the BIKI is explicit, "Returns the current music volume (set by
+`fadeMusic`)" — so they sit at 1 no matter where the player drags the Audio
+Options sliders. The profile sliders come from `getAudioOptionVolumes`
+(`[effects, music, radio, von, UI, map]`, Arma 3 1.94). What the player actually
+hears is the product of the two, which `fadeMusic`'s own page states: **Final
+Volume = Client Setting × Scripted Volume**. That product is what the `vol`
+channel now carries.
+
+Nothing could have caught this from the outside: the wrong getters return a
+perfectly plausible `1.0`, so the page rendered fine and simply never responded
+to the slider. Found 2026-08-29 by checking the getters against their own
+documentation rather than against their names.
 
 Streaming is not possible: the sandbox permits media inline or via `data:` only,
 so `<audio src="http://...">` is blocked exactly like `fetch`.
@@ -382,7 +433,11 @@ because an abort at the end of a function loses only what is left to do.
 shows `inject: loadFile` with no `webui.js N bytes` line after it -- SQF's
 injector died at the refusal and delivered nothing -- and the bridge still came
 up, readiness landed via `pageloaded` in 0.231s, and all eleven self-test checks
-passed. The page's own `A3API.RequestFile` stub carried the whole boot on its
+passed. (The suite was eleven checks on that date; it is thirteen now — a "refused
+prompt leaves the running prompt's field alone" check was added when
+`fn_prompt`'s busy guard turned out to be seeding the overlay before refusing,
+and a "stale busy latch is cleared, not obeyed" check when the busy latch turned
+out to survive across missions.) The page's own `A3API.RequestFile` stub carried the whole boot on its
 own. That is the architecture working as intended: the reliable path does not
 touch `loadFile`, and the unreliable one is a net.
 

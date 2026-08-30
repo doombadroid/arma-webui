@@ -39,12 +39,12 @@ Cut to black. Title.
 
 ## 2. WHAT IT IS (1:40–2:40)
 
-> "Arma 3.20 added a browser control — type 106, `CT_WEBBROWSER`. It'll render a
+> "Arma 3 2.20 added a browser control — type 106, `CT_WEBBROWSER`. It'll render a
 > local page. On its own that gets you a picture: no way to get data in, no way
 > to get a click back out.
 >
-> arma-webui is the part that makes it two-way. Fifteen SQF functions and one JS
-> file — about 480 lines total — and then you write your UI in HTML and CSS like
+> arma-webui is the part that makes it two-way. Eleven core SQF functions, eleven
+> diagnostics and one JS file — and then you write your UI in HTML and CSS like
 > it's 2010 and you're happy about it."
 
 **Show:** the four calls, on screen as text:
@@ -91,7 +91,7 @@ JavaScript string. Serialise with `toJSON`, which arrives as a real JS object.
 > payload, SQF catches it, and answers by injecting JS back.
 >
 > You are tunnelling an RPC layer through `alert()`. It works, it's fast enough —
-> about fifteen to twenty milliseconds round trip — and once it's wrapped you
+> on the order of tens of milliseconds round trip — and once it's wrapped you
 > never think about it again."
 
 **Show:** the round-trip in one diagram. Keep it 15 seconds, don't linger.
@@ -182,9 +182,17 @@ Be straight about it.
 
 ## THINGS NOT TO CLAIM
 
-- Don't say it replaces all Arma UI. It can't draw over the world usefully and
-  native controls still layer on top of it.
-- Don't quote a round-trip figure other than ~15–20 ms; that's what was measured.
+- Don't say it replaces all Arma UI — native controls still layer on top of it.
+  But do NOT say it can't draw over the world: FINDINGS 8 measured a transparent
+  page over the world (transparent control background plus a transparent page),
+  which is how a HUD overlay is built, and this library has explicit handling for
+  browser controls in RscTitles layers. The honest caveat is that such a layer is
+  not a dialog — Esc does not close it and neither does `closeDialog`.
+- Don't quote a round-trip figure as fact. The measured numbers in FINDINGS 5
+  were taken with an unrecorded client uptime, and `diag_tickTime` is single
+  precision, so their true resolution is unknown. Say "on the order of tens of
+  milliseconds", or re-run `webui_fnc_latencyProbe` on a freshly started client
+  and quote that.
 - The −1.1 fps was one machine, one scene. Say so.
 - Don't imply the Steam-launch behaviour is documented anywhere. It isn't. It's
   an observation from one setup and it may not generalise.

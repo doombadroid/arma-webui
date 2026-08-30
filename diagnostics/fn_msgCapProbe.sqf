@@ -47,13 +47,15 @@ private _HI   = 65536;      // known-bad  total length (leg B, 0/20)
 // path for alert rounds -- i.e. each channel verifies itself, no crossover.
 [_ctrl, "capRx", {
     params [["_n", -1, [0]]];
-    private _c = uiNamespace getVariable ["WEBUI_ctrl", controlNull];
-    if (!isNull _c) then { _c setVariable ["webui_capRx", _n] };
+    // the control this handler fired on, not the last one initialised
+    if (!isNull _webuiCtrl) then { _webuiCtrl setVariable ["webui_capRx", _n] };
     true
 }] call webui_fnc_on;
 
-// The ASK envelope is ["ASK", name, args] and the CALL envelope is
-// ["CALL", seq, name, args]; both are built page-side as a 4-element array
+// Two different shapes, because fn_init parses different element counts:
+//   alert channel  ['CALL', seq, 'capRx', [len, padding]]   -- 4 elements
+//   ask channel    ['ASK', 'capRx', [len, padding]]         -- 3 elements
+// The padding rides as args[1] in both; it is never a top-level element.
 // ["ASK"|"CALL", "capRx", [len], padding] -- fn_init's ASK case reads elements
 // 1..2 and the CALL case would misread it, so the alert channel sends the CALL
 // shape explicitly:
@@ -84,8 +86,15 @@ private _tryRaw = {
     (_ctrl getVariable ["webui_capRx", -1]) isEqualTo _len
 };
 
+uiNamespace setVariable ["WEBUI_capVerdicts", []];
 {
+    // call {} so the exitWith guards below end THIS CHANNEL and not the loop.
+    // exitWith leaves the enclosing scope, and directly inside a forEach body
+    // that scope is the whole forEach: a single missed known-good bracket on
+    // the alert channel therefore skipped the ask channel entirely while the
+    // script still printed its cheerful "done -- paste the VERDICT rows" line.
     _x params ["_label", "_tpl"];
+    call {
     if (isNull _ctrl) exitWith {};
     systemChat format ["cap probe: bisecting %1 channel", _label];
 
@@ -120,7 +129,18 @@ private _tryRaw = {
     } else {
         diag_log format ["[WEBUI-CAP] chan=%1 VERDICT UNSTABLE: len=%2 ok %3/3, len=%4 ok %5/3 -- cap moves under load, treat %2 as optimistic", _label, _lo, _okLo, _hi, _okHi];
     };
+    private _seen = uiNamespace getVariable ["WEBUI_capVerdicts", []];
+    _seen pushBackUnique _label;
+    uiNamespace setVariable ["WEBUI_capVerdicts", _seen];
+    };
 } forEach [["alert", _mkAlert], ["ask", _mkAsk]];
+
+diag_log format ["[WEBUI-CAP] channels with a verdict: %1 of 2", count (uiNamespace getVariable ["WEBUI_capVerdicts", []])];
+if (count (uiNamespace getVariable ["WEBUI_capVerdicts", []]) < 2) then {
+    diag_log "[WEBUI-CAP] INCOMPLETE -- at least one channel produced no verdict. FINDINGS 5's 'identical for SendAlert and SendConfirm' claim needs BOTH.";
+};
+[_ctrl, "capRx"] call webui_fnc_off;
+_ctrl setVariable ["webui_capRx", nil];
 
 diag_log "[WEBUI-CAP] done -- paste the VERDICT rows into docs/FINDINGS.md section 5";
 systemChat "cap probe done -- results in the RPT under [WEBUI-CAP]";

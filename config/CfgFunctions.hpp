@@ -23,6 +23,7 @@ class webui {
         file = "webui\functions";
         class init {};          // wire a CT_WEBBROWSER control up as a channel
         class on {};            // register a handler a page may call
+        class off {};           // unregister one (diagnostics must not leave theirs behind)
         class push {};          // SQF -> page value push
         class call {};          // SQF -> page call WITH a return value
         class exec {};          // ExecJS, queued until the page is up

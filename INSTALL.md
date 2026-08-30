@@ -1,10 +1,14 @@
 # Install checklist
 
-Six things. Miss either of the first two and it fails **silently** — the page
-renders perfectly and simply cannot talk to the game. Miss the sixth and it
-works, but every screen takes a visible moment to populate.
+Six things. Miss **step 3 or step 4** and it fails **silently** — the page
+renders perfectly and simply cannot talk to the game. (Step 2 fails loudly; it
+has its own check below.) Miss the sixth and it works, but every screen takes a
+visible moment to populate.
 
-1. **Files** — `functions/`, `diagnostics/`, `ui/webui.js` into the mission.
+1. **Files** — `functions/`, `diagnostics/` and `ui/webui.js` into the mission,
+   plus `ui/demo.html` and `ui/probe.html` if you want the verification page in
+   step "Verifying" below. Put the pages where the whitelist in step 3 expects
+   them — `<mission>\ui\html\` unless you change the pattern.
 2. **`CfgFunctions`** — `#include "webui\config\CfgFunctions.hpp"`.
    Check with `isNil "webui_fnc_init"` in the debug console; `false` is good.
 3. **`description.ext`** — `#include "webui\config\CfgCommands.hpp"`.
@@ -63,7 +67,9 @@ raw engine call and is available to the page immediately.
 
 ## Verifying
 
-Point a control at `ui/demo.html` and open it. Expect in the RPT:
+Point a control at `ui\html\demo.html` and open it — the whitelist in step 3
+covers `ui\html\*`, so a control pointed at a bare `ui\demo.html` reproduces
+precondition one instead of ruling it out. Expect in the RPT:
 
 ```
 [WEBUI] initialised (4-way) t=...
@@ -82,11 +88,15 @@ bridge up and how long it took:
 `hello`, `message` or `pageloaded` inside ~0.25 s is healthy — measured range on
 a working client is 0.20–0.39 s depending on which signal wins (FINDINGS 10).
 
-`timer` is the failure: nothing reached the page for three seconds and the queue
-drained on the backstop. Check step 3's whitelist, then grep the RPT for
-`[WEBUI] inject: loadFile REFUSED` — `loadFile` is refused in some client
-contexts and takes the whole injector down with it (FINDINGS 11), which leaves
-the page's own stub from step 6 as the only working boot path.
+`timer` is the failure: nothing reached the page for three seconds. The queue is
+**held, not drained** -- nothing has been lost, but nothing will arrive until the
+bridge actually announces itself. Check step 3's whitelist, then grep the RPT for
+`[WEBUI] inject: loadFile` and look at **whether an `inject: webui.js N bytes`
+line follows it**. A missing follow-up means the refusal killed the injector:
+`loadFile` is refused in some client contexts, the refusal is not catchable and
+prints nothing of its own (FINDINGS 11), so the absence of the second line is
+the entire signal. That leaves the page's own stub from step 6 as the only
+working boot path.
 
 Then:
 
@@ -120,3 +130,51 @@ It needs nothing from the page and works against pages you cannot edit.
 | pushes never arrive | sent before the page was up — use `webui_fnc_push`, which queues |
 | page renders instantly, then sits empty for most of a second | no self-boot stub (step 6), so the bridge only arrives on SQF's retry. Run `webui_fnc_bootProbe`: boot path `sqf` confirms it |
 | some players report the delay and you cannot reproduce it | the same thing. The stub always wins the race on the machine that has it, and whether `PageLoaded` is caught depends on how fast the client loads the page, so a faster machine can feel slower |
+
+## "The page is slow to appear" — triage in order
+
+**Read one line from the RPT first:** `[WEBUI] ready via '<signal>' Ns after init`.
+
+| signal | meaning | what to do |
+|---|---|---|
+| `hello` or `message`, 0.20–0.39 s | healthy | nothing |
+| `pageloaded` | the document loaded but the bridge had not announced itself yet | the queue is **held**, not drained, until a real `hello` arrives. Usually fine; if it persists, the stub path is broken |
+| `timer` | nothing reached the page for three seconds; the queue is HELD, not lost | step 3's whitelist, then the step-6 stub, then `WEBUI_jsPath` |
+| no line at all | `webui_fnc_init` never ran on the control | your `onLoad` |
+
+Then, in order of how much time they cost:
+
+1. **The whole page never populates.** Path not whitelisted, or `init` never
+   called. Unbounded, and silent. `webui_fnc_bootProbe` names which.
+2. **3 s backstop.** No stub and a refused `loadFile`. The tell is an
+   `inject: loadFile` line with no `inject: webui.js N bytes` line after it —
+   the refusal is not catchable and kills the injector silently.
+3. **A slow `ask` handler freezes the page.** `WEBUI.ask` runs its SQF handler
+   *unscheduled* while the page is blocked inside `SendConfirm`, so the whole
+   document stops for as long as it runs. Anything over 5 ms logs
+   `[WEBUI] SLOW ask(...)`. Move expensive work to `webui_fnc_on` + `WEBUI.call`,
+   which is spawned.
+4. **A `WEBUI.call` to a handler that never answers** costs its full timeout
+   (10 s default). An *unregistered* name fails immediately, so a 10 s wait
+   means a registered handler that never returned.
+5. **Oversized replies.** Over 10240 bytes page→SQF is truncated silently;
+   `webui.js` now refuses to send one and names it instead of letting it present
+   as a timeout.
+6. **Page code gated behind `WEBUIReady`.** Anything that needs nothing from SQF
+   — layout, static text, listeners — should run outside that callback, or it
+   waits for the entire boot.
+7. **`webui_fnc_serve`** adds up to its fetch timeout (5 s default) and then
+   rewrites the document, which is a visible re-render after the page was
+   already up.
+
+**If it renders but looks frozen, that is not a loading problem.** Launch path
+(FINDINGS 1) first, then Steam's *GPU-accelerated web rendering* setting — with
+that on, the in-game surface can sit at ~1 fps while the game itself is fine.
+Delivery is dirty-driven, so a static page idling at ~0.6 fps is correct.
+
+**Once per session**, `webui_fnc_clampCheck` forces a 60 Hz style mutation for
+3 s, starting 2 s after the first page becomes ready, to tell a clamped client
+from a healthy one. It briefly outlines `document.body` and restores whatever
+was there before. Opt out with
+`missionNamespace setVariable ["webui_clampCheckDisabled", true]` before the
+first `webui_fnc_init`.

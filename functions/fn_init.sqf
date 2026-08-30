@@ -37,9 +37,12 @@ params [["_ctrl", controlNull, [controlNull]]];
 if (isNull _ctrl) exitWith { diag_log "[WEBUI] init: null control"; false };
 
 _ctrl setVariable ["webui_api",   createHashMap];  // name -> handler code
-_ctrl setVariable ["webui_ready", false];          // has the bridge reached the page?
+_ctrl setVariable ["webui_ready", false];          // has the PAGE loaded?
+_ctrl setVariable ["webui_bridge", false];         // is window.WEBUI PROVEN to exist?
+_ctrl setVariable ["webui_bridgeAt", nil];         // when it was proven (not when the page loaded)
 _ctrl setVariable ["webui_queue", []];             // ExecJS held until it has
-_ctrl setVariable ["webui_js",    createHashMap];  // SQF -> JS call id -> [ok, value]
+_ctrl setVariable ["webui_js",    createHashMap];  // SQF -> JS call id -> [ok, [value]] (boxed: [] == null)
+_ctrl setVariable ["webui_jsLive", createHashMap];  // ids still being waited on by webui_fnc_call
 _ctrl setVariable ["webui_jsSeq", 0];
 _ctrl setVariable ["webui_initAt", diag_tickTime];   // for the readiness delta
 
@@ -69,13 +72,19 @@ diag_log format ["[WEBUI] mission root: %1", _root];
 [_ctrl, "playerInfo", { [name player, getPlayerUID player, str (side player)] }]   call webui_fnc_on;
 [_ctrl, "serverTime", { [round dayTime, round serverTime] }]                       call webui_fnc_on;
 [_ctrl, "screenSize", { getResolution select [0, 2] }]                             call webui_fnc_on;
+// Which control is this page in? A page cannot know its own idc, and every
+// diagnostic that wanted to show it had to wait for SQF to volunteer it.
+[_ctrl, "ctrlInfo",   { [ctrlIDC _webuiCtrl, ctrlPosition _webuiCtrl] }]           call webui_fnc_on;
 
 // Native text entry. Pages cannot read their own <input> fields, so this is the
 // only way to get typed text out of a web UI screen. Blocks until the player
 // confirms or cancels; returns nil on cancel.
 [_ctrl, "promptText", {
     params [["_title","Enter text",[""]], ["_prefill","",[""]], ["_max",64,[0]]];
-    [_title, _prefill, _max] call webui_fnc_prompt
+    // Pass the control this handler fired on, so the overlay is resolved from
+    // the dialog whose page asked -- not from whichever control happened to
+    // initialise last.
+    [_title, _prefill, _max, _webuiCtrl] call webui_fnc_prompt
 }] call webui_fnc_on;
 
 // ------------------------------------------------------------ response path
@@ -86,10 +95,37 @@ private _respond = {
     // HashMap"), and a nil return is not exotic here -- webui_fnc_prompt
     // returns nil on every cancel.
     private _json = "null";
-    if (!isNil "_payload") then { _json = toJSON _payload; };
+    if (!isNil "_payload") then {
+        _json = toJSON _payload;
+        // toJSON returns an EMPTY STRING for an unsupported top-level type
+        // (Object, Code, Group, Side...) rather than failing. Sent as-is that
+        // resolves the page's promise with "" instead of null, silently. Same
+        // mapping fn_push makes.
+        if (_json isEqualTo "") then {
+            diag_log format ["[WEBUI] reply seq %1: unsupported return type (%2) -- sending null",
+                _seq, typeName _payload];
+            _json = "null";
+        };
+    };
     private _b64 = _c ctrlWebBrowserAction ["ToBase64", _json];
-    [_c, format ["window.WEBUI && WEBUI._resolve(%1,%2,'%3');",
-        _seq, ["false", "true"] select _ok, _b64]] call webui_fnc_exec;
+
+    // NEVER QUEUE A REPLY -- sent directly, or dropped.
+    //
+    // A reply is scoped to the document that asked; the queue is not. Page call
+    // ids restart at 1 on every renavigation, so a reply held across a freeze
+    // was drained into the NEXT document and resolved whichever call took the
+    // same id -- the page got a stranger's answer, silently. Pushes keep
+    // queuing: a channel value is document-independent, which is what makes
+    // on()'s replay work.
+    if !(_c getVariable ["webui_bridge", false]) exitWith {
+        diag_log format ["[WEBUI] reply seq %1 DROPPED -- the bridge is down (frozen page?), and a reply cannot be held for a later document: its call id would collide with that document's own calls. The caller times out honestly instead.",
+            _seq];
+    };
+    // _seq toFixed 0 for the same reason as fn_call's _id: default number
+    // formatting is 6 significant figures and this lands in JavaScript source.
+    _c ctrlWebBrowserAction ["ExecJS",
+        format ["window.WEBUI && WEBUI._resolve(%1,%2,'%3');",
+            _seq toFixed 0, ["false", "true"] select _ok, _b64]];
 };
 _ctrl setVariable ["webui_respond", _respond];
 
@@ -128,12 +164,53 @@ private _markReady = {
         diag_log format ["[WEBUI] ready via '%1' %2s after init (t=%3)",
             _signal, (diag_tickTime - _t0) toFixed 3, diag_tickTime toFixed 1];
     };
+    // ONLY 'hello' AND 'message' PROVE window.WEBUI EXISTS. 'pageloaded' and
+    // 'timer' prove the document is up and nothing more, and every queued
+    // statement is guarded by `window.WEBUI && ...` -- so draining on those two
+    // fired the queue into a document with no bridge, silently, and emptied it.
+    // Hold instead: the injector keeps retrying, and the first HELLO drains for
+    // real.
+    private _proven = _signal in ["hello", "message"];
+    if (_proven && { !(_c getVariable ["webui_bridge", false]) }) then {
+        _c setVariable ["webui_bridge", true];
+        // Stamp the moment the BRIDGE landed. webui_readyAt records when the
+        // page loaded, which is a different and usually earlier instant -- so a
+        // probe computing "init -> first data" from readyAt reports the page
+        // load and misses exactly the boot delay it exists to catch.
+        _c setVariable ["webui_bridgeAt", diag_tickTime];
+        diag_log format ["[WEBUI] bridge proven via '%1' %2s after init",
+            _signal, (diag_tickTime - (_c getVariable ["webui_initAt", diag_tickTime])) toFixed 3];
+    };
+
     private _q = _c getVariable ["webui_queue", []];
     if (_q isNotEqualTo []) then {
-        _c setVariable ["webui_queue", []];
-        { _c ctrlWebBrowserAction ["ExecJS", _x]; } forEach _q;
-        diag_log format ["[WEBUI] drained %1 queued ExecJS via '%2' (t=%3)",
-            count _q, _signal, diag_tickTime toFixed 1];
+        if (_c getVariable ["webui_bridge", false]) then {
+            // resize 0, NOT a new array: webui_fnc_exec holds a reference to
+            // this exact object, so swapping in a fresh one leaves any exec
+            // already in flight appending to an orphan (or writing its stale
+            // reference back over this one). One object, mutated in place.
+            private _sent = +_q;                  // copy before clearing
+            _q resize 0;
+            // ONE ExecJS, not up to 200 back-to-back engine calls in a frame.
+            // Each statement keeps its own try/catch so a thrower still takes
+            // only itself down, as it did when they were separate calls.
+            private _batch = (_sent apply {
+                // Caller JS on its own line, closing brace on the next: exec
+                // accepts arbitrary JS, and a trailing // comment would otherwise
+                // swallow the generated }catch{} and make the whole batch a
+                // SyntaxError -- losing every held statement, silently.
+                format ["try{
+%1
+}catch(e){if(window.WEBUI)window.WEBUI.call('log',['queued ExecJS failed: '+(e&&e.message)])['catch'](function(){});}", _x]
+            }) joinString ";
+";
+            _c ctrlWebBrowserAction ["ExecJS", _batch];
+            diag_log format ["[WEBUI] drained %1 queued ExecJS in one batch via '%2' (t=%3)",
+                count _sent, _signal, diag_tickTime toFixed 1];
+        } else {
+            diag_log format ["[WEBUI] HOLDING %1 queued ExecJS -- '%2' does not prove window.WEBUI exists yet (t=%3)",
+                count _q, _signal, diag_tickTime toFixed 1];
+        };
     };
     // once per session, off the readiness path so it costs the first paint
     // nothing: is this client's frame delivery clamped? (FINDINGS section 1 --
@@ -185,7 +262,7 @@ _ctrl ctrlAddEventHandler ["PageLoaded", {
     uiSleep 3;
     if (isNull _ctrl) exitWith {};
     if !(_ctrl getVariable ["webui_ready", false]) then {
-        diag_log "[WEBUI] no hello, no PageLoaded and no inbound message in 3s -- draining anyway";
+        diag_log "[WEBUI] no hello, no PageLoaded and no inbound message in 3s -- marking ready on the backstop; the queue stays HELD until the bridge announces itself";
         [_ctrl, false, "timer"] call _markReady;
     };
 };
@@ -210,7 +287,11 @@ _ctrl ctrlAddEventHandler ["JSDialog", {
     // right name first time (a relabel afterwards would leave the RPT's "ready
     // via" line disagreeing with the stored signal). The doubled quotes are SQF's
     // escape: this compares against the literal 8 characters ["HELLO"
-    if !(_control getVariable ["webui_ready", false]) then {
+    // Gated on webui_BRIDGE, not webui_ready. Gating on readiness meant that
+    // once 'pageloaded' or the 3s timer had marked the page ready, this branch
+    // never ran again -- so the HELLO that finally proved the bridge existed
+    // was ignored and the held queue was never drained.
+    if !(_control getVariable ["webui_bridge", false]) then {
         private _sig = if ((_message select [0, 8]) isEqualTo "[""HELLO""") then { "hello" } else { "message" };
         [_control, false, _sig] call (_control getVariable ["webui_markReady", {}]);
     };
@@ -249,6 +330,14 @@ _ctrl ctrlAddEventHandler ["JSDialog", {
                     params ["_control", "_seq", "_fn", "_args", "_respond"];
                     private _ok = true;
                     private _res = "";
+                    // `call` runs the handler in THIS scope, so a handler that
+                    // needs to know which control it fired on can read
+                    // _webuiCtrl. Without it the only way to find out was
+                    // uiNamespace WEBUI_ctrl -- the LAST control initialised,
+                    // not the calling one -- which is what every diagnostic
+                    // handler used to do, so with two browser controls live
+                    // their results were stamped onto the wrong one.
+                    private _webuiCtrl = _control;
                     try { _res = _args call _fn; }
                     catch {
                         _ok = false; _res = str _exception;
@@ -278,19 +367,84 @@ _ctrl ctrlAddEventHandler ["JSDialog", {
                 diag_log format ["[WEBUI] blocked ask to unregistered name '%1'", _name];
                 _out = false;
             } else {
+                private _webuiCtrl = _control;   // see the CALL path above
+                // TIME IT. This runs UNSCHEDULED, inside the JSDialog handler,
+                // while the page is blocked inside SendConfirm -- so a slow ask
+                // handler does not merely delay its own answer, it freezes the
+                // whole page for as long as it runs. The docstring says "cheap
+                // only, must not suspend" and nothing enforced it, so the cost
+                // was invisible and showed up as "the UI is janky".
+                private _t0 = diag_tickTime;
                 try { _out = _args call _fn; } catch { _out = false; };
+                private _ms = (diag_tickTime - _t0) * 1000;
+                // diag_tickTime is single precision and coarsens with uptime
+                // (BIKI), so a fixed 5 ms trip point eventually reports
+                // quantisation as slowness. Require two of the clock's own
+                // quanta too. float32 mantissa is 24 bits, so the step is
+                // 2^(exponent-23).
+                private _quantumMs = (2 ^ ((floor (ln (diag_tickTime max 1) / ln 2)) - 23)) * 1000;
+                if (_ms > (5 max (2 * _quantumMs))) then {
+                    diag_log format ["[WEBUI] SLOW ask('%1'): %2ms of BLOCKED page time. ask handlers run unscheduled and hold the page inside SendConfirm -- move anything this expensive to webui_fnc_on + WEBUI.call, which is spawned.",
+                        _name, _ms toFixed 1];
+                };
+                // Once per session, not once per ask: past ~9h uptime the quantum
+                // clears 2.5ms permanently, and an unlatched note would flood the
+                // RPT with one line per ask for the rest of the session.
+                if (_quantumMs > 2.5 && { isNil { missionNamespace getVariable "webui_quantumNoted" } }) then {
+                    missionNamespace setVariable ["webui_quantumNoted", true];
+                    diag_log format ["[WEBUI] note: diag_tickTime quantum is now %1ms (long uptime) -- ask timings below that are not meaningful",
+                        _quantumMs toFixed 2];
+                };
                 if (isNil "_out" || { !(_out isEqualType true) }) then { _out = false };
             };
         };
 
-        // The bridge announcing that it exists. Carries nothing: the readiness
-        // marking above is the entire point, and it has already happened.
-        case "HELLO": {};
+        // HELLO is the only signal proving window.WEBUI is live in the document
+        // talking to us now, so it is where the mission root is (re)sent. Sent
+        // once at init it was lost whenever readiness came from 'pageloaded' or
+        // the timer, leaving missionRoot "" and every mission-relative texture
+        // failing for the life of the page. Idempotent; one ExecJS per document.
+        case "HELLO": {
+            private _root = getMissionPath "";
+            _control ctrlWebBrowserAction ["ExecJS",
+                format ["window.WEBUI && WEBUI._setRoot('%1');",
+                    _control ctrlWebBrowserAction ["ToBase64", _root]]];
+        };
 
         // the page answering a SQF -> JS call
         case "REPLY": {
-            _req params ["", ["_id", -1, [0]], ["_ok", false, [true]], "_value"];
-            (_control getVariable ["webui_js", createHashMap]) set [_id, [_ok, _value]];
+            // _value is read positionally, not through params: a nil element
+            // leaves a params variable private-but-undefined, so referencing it
+            // raises and aborts this handler before it can reply -- and the
+            // engine holds the browser unresponsive until a reply is sent. Any
+            // WEBUI.handle() that acts instead of computing returns undefined,
+            // so this is the normal path, not an edge case.
+            _req params ["", ["_id", -1, [0]], ["_ok", false, [true]]];
+
+            // Store only if someone is still waiting: fn_call drops the id when
+            // it gives up, so a late reply is discarded rather than orphaned.
+            // if/else and NOT exitWith -- inside a case block exitWith would
+            // unwind past the switch and skip the `_out` that ends this handler,
+            // which is the reply the engine holds the browser open for.
+            // The shared malformed-input guard only enforces count >= 2, so a
+            // short REPLY envelope made the `_req select 3` below index two past
+            // the end -- which RAISES rather than yielding nil, killing the
+            // handler before it can reply and wedging the page.
+            private _hasValue = count _req > 3 && { !isNil { _req select 3 } };
+            // PRESENCE, not truthiness. fn_call stores a per-call TOKEN ARRAY
+            // as the map value (it verifies ownership by reading it back), so a
+            // boolean test here would be applying ! to an array.
+            private _live = _control getVariable ["webui_jsLive", createHashMap];
+            if (isNil { _live get _id }) then {
+                diag_log format ["[WEBUI] late REPLY for id %1 discarded -- nobody waiting", _id];
+            } else {
+                private _slot = _control getVariable ["webui_js", createHashMap];
+                if (_hasValue) then {
+                    _slot set [_id, [_ok, [_req select 3]]];
+                } else {
+                    _slot set [_id, [_ok, []]];    // [] == "the page answered with null"
+                };
+            };
         };
 
         default {
@@ -320,7 +474,15 @@ _ctrl ctrlAddEventHandler ["JSDialog", {
 // rather than whenever the page's own code happens to call something. The
 // first shot at t=0 usually lands before the page can receive it (the wiki is
 // explicit that ExecJS before PageLoaded may be dropped) -- that is what the
-// retry is for, and 50ms is the new floor instead of 300ms.
+// retry is for.
+//
+// DO NOT QUOTE 50 ms AS THE FLOOR. That was the prediction, and FINDINGS 10
+// measured it and refuted it: readiness took three attempts over 0.315 s, and
+// stub-less pages came up at 0.200-0.205 s. The honest improvement is roughly
+// 1.5-2x over the old ladder, not 6x. The binding constraint is WHEN THE PAGE
+// BECOMES ABLE TO RECEIVE ExecJS, not the retry interval -- so shortening _wait
+// below does not lower the floor, and the retired 50 ms figure must not
+// reappear in a doc or a tuning decision.
 diag_log format ["[WEBUI] initialised (4-way) t=%1", diag_tickTime toFixed 1];
 
 [_ctrl] spawn {
@@ -377,9 +539,10 @@ diag_log format ["[WEBUI] initialised (4-way) t=%1", diag_tickTime toFixed 1];
     //
     // __webuiHello IS SET ONLY AFTER SendAlert RETURNS. Latching it first means
     // a send that is dropped or throws still marks the announcement done, and
-    // every remaining retry becomes a guaranteed no-op that re-pushes 13 KB for
-    // nothing -- readiness then falls to the 3s backstop, which is WORSE than
-    // the 0.3s floor this loop replaced, and the RPT blames the whitelist.
+    // every remaining retry becomes a guaranteed no-op that re-pushes the whole
+    // bridge for nothing -- readiness then falls to the 3s backstop, which is
+    // WORSE than the 0.3s floor this loop replaced, and the RPT blames the
+    // whitelist.
     //
     // The doubled quotes are SQF's escape, not a typo: this has to reach the
     // page as A3API.SendAlert('["HELLO",1]').
@@ -395,13 +558,28 @@ diag_log format ["[WEBUI] initialised (4-way) t=%1", diag_tickTime toFixed 1];
         + "{A3API.SendAlert('[""HELLO"",1]');window.__webuiHello=1;}"
         + "}catch(e){}})();";
 
+    // THE PROBE ALONE, for the later retries. The full payload above carries
+    // webui.js itself -- 24 KB at the time of writing -- and this loop runs up
+    // to ten times, so re-sending all of it every attempt pushed a quarter of a
+    // megabyte of ExecJS at a page that had usually already received the bridge
+    // and simply had not got its HELLO through. Three full attempts cover a
+    // delivery failure; after that only the announcement is worth repeating,
+    // and it is a couple of hundred bytes.
+    private _probe = "(function(){try{"
+        + "if(window.WEBUI&&!window.__webuiHello&&typeof A3API!=='undefined'&&A3API.SendAlert)"
+        + "{A3API.SendAlert('[""HELLO"",1]');window.__webuiHello=1;}"
+        + "}catch(e){}})();";
+
     private _deadline = diag_tickTime + 3;
     private _wait = 0.05;
     private _n = 0;
+    private _bytes = 0;
     while { !isNull _ctrl
-            && { !(_ctrl getVariable ["webui_ready", false]) }
+            && { !(_ctrl getVariable ["webui_bridge", false]) }
             && { diag_tickTime < _deadline } } do {
-        _ctrl ctrlWebBrowserAction ["ExecJS", _hello];
+        private _payload = if (_n < 3) then { _hello } else { _probe };
+        _ctrl ctrlWebBrowserAction ["ExecJS", _payload];
+        _bytes = _bytes + count _payload;
         _n = _n + 1;
         uiSleep _wait;
         _wait = (_wait * 1.6) min 0.5;
@@ -409,9 +587,9 @@ diag_log format ["[WEBUI] initialised (4-way) t=%1", diag_tickTime toFixed 1];
 
     if (isNull _ctrl) exitWith {};
     private _t0 = _ctrl getVariable ["webui_initAt", diag_tickTime];
-    diag_log format ["[WEBUI] inject: %1 attempt(s) over %2s, ready=%3 via '%4'",
-        _n, (diag_tickTime - _t0) toFixed 3,
-        _ctrl getVariable ["webui_ready", false],
+    diag_log format ["[WEBUI] inject: %1 attempt(s), %2 KB sent, over %3s, bridge=%4 via '%5'",
+        _n, (_bytes / 1024) toFixed 1, (diag_tickTime - _t0) toFixed 3,
+        _ctrl getVariable ["webui_bridge", false],
         _ctrl getVariable ["webui_readySignal", "none"]];
 };
 

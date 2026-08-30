@@ -89,7 +89,19 @@ class WebUI_PromptOk {
     // Stamps WEBUI_promptGen, not a bare 1: webui_fnc_prompt only accepts a done
     // signal carrying its own generation, so a press that arrives after its prompt
     // gave up cannot release the next one with the wrong answer.
-    onButtonClick = "with uiNamespace do { WEBUI_promptResult = ctrlText ((ctrlParent (uiNamespace getVariable ['WEBUI_ctrl', controlNull])) displayCtrl 937413); WEBUI_promptDone = uiNamespace getVariable ['WEBUI_promptGen', 0]; };";
+    //
+    // THE EDIT BOX IS RESOLVED FROM THIS BUTTON'S OWN DISPLAY. onButtonClick is
+    // handed the button control as (_this select 0) (BIKI, User Interface Event
+    // Handlers: params ["_control"]), and the button is by construction in the
+    // same display as the overlay it belongs to -- so ctrlParent of it is always
+    // the right display, with no global to get wrong.
+    //
+    // This used to read ctrlParent of uiNamespace WEBUI_ctrl, the LAST control
+    // initialised. webui_fnc_prompt was fixed to show and read the overlay of the
+    // CALLING control, and this handler was not, so with two browser controls
+    // live the prompt opened on one dialog and the OK button read idc 937413 out
+    // of another -- the answer came from a different screen's edit box.
+    onButtonClick = "with uiNamespace do { WEBUI_promptResult = ctrlText ((ctrlParent (_this select 0)) displayCtrl 937413); WEBUI_promptDone = uiNamespace getVariable ['WEBUI_promptGen', 0]; };";
 };
 class WebUI_PromptCancel : WebUI_PromptOk {
     idc = 937415; show = 0;
