@@ -559,6 +559,26 @@ yet" and pump it the frame it exists. Same rule for a freeze: gate it on TIME af
 first paint, never on a paint count -- a static page paints once or twice and a count
 of thirty never arrives.
 
+### ExecJS does not execute inside a ui2texture browser (measured 2026-09-06)
+
+The one-directional surprise. Page -> SQF works in a browser that lives inside a
+UI-on-texture display: `SendAlert`, the bridge's `call`/`log`, `RequestTexture`,
+`RequestFile` all answered. SQF -> page does not: `ctrlWebBrowserAction ["ExecJS", …]`
+-- and therefore `webui_fnc_push`, `webui_fnc_call` and `webui_fnc_serve`'s
+`WEBUI._serve` -- never ran, with no error and the exec queue reporting "drained".
+The identical serve swap works offline in Chrome (`examples/ui2texture/serve_swap.mjs`),
+and the "bridge proven via hello" line still appears in-texture because the page's own
+`webui.js` self-boot never needed ExecJS.
+
+What still reaches an in-texture page from the engine: **`ctrlWebBrowserAction
+["OpenDataAsURL", markup]`**. It loads a whole document with no script in the path,
+the loaded document keeps `A3API` (its `RequestTexture` returned the 1024-px base
+sheet on the same run), and its inline scripts run. That is how a server-streamed
+skin is applied now (`fn_htmlSkinClient`): fetch through the serve fetcher, hand the
+bytes to the control. Design in-texture pages as self-driving -- state in through the
+initial markup, `RequestFile`, `RequestTexture`; nothing pushed later. (This is also
+why the parallax probe's camera vector never arrived.)
+
 ### Server-streamed static skins (measured 2026-09-06)
 
 The art never enters the mission PBO. `fn_htmlSkin` broadcasts

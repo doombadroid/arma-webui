@@ -48,7 +48,10 @@ has a per-viewer half that is `remoteExec`'d.
 
 ## Rules for a page on a model (give these to your designer)
 
-- **Self-contained.** No fetch, fonts or external files; images as data URIs; canvas or CSS.
+- **Self-contained and self-driving.** No fetch, fonts or external files; images as data URIs;
+  canvas or CSS. And nothing arrives from SQF later: ExecJS does not execute in an
+  in-texture browser (§12), so a page gets its state from its own markup, `RequestFile`
+  and `RequestTexture` only. Page → SQF calls still work.
 - **It is a UV sheet, not a shape.** The page is stretched over the model's texture layout.
   A uniform is a patchwork of islands; a car is a flattened body. Design on the sheet.
 - **`A3API.RequestTexture("<the model's own _co.paa>", 1024)`** hands the page the real base
