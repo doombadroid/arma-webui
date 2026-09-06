@@ -508,6 +508,29 @@ What the run pinned down, beyond "it works":
   objects "cannot be textured" and "addAction does not work" on them (wiki,
   `createSimpleObject`); the class-name syntax can be textured.
 
+### Cost at scale (measured 2026-09-06)
+
+`AP_fnc_uiTexBench` in the host mission: N class-name simple cars in a grid, each
+wearing a 512² white-noise page through its own ui2texture display and browser,
+every display pumped every frame, `diag_fps` sampled before/during/after. Steam
+launch, Proton, one client. Frame time from the post-run baseline:
+
+| cars | idle ms | loaded ms | Δ ms | Δ per car |
+|---|---|---|---|---|
+| 20 | 13.9 | 19.0 | 5.1 | **0.26 ms** |
+| 60 | 13.2 | 33.1 | 19.8 | **0.33 ms** |
+| 160 | 13.5 | 32.8 | 19.3 | 0.12 ms |
+| 200 | 12.3 | 30.7 | 18.4 | 0.09 ms |
+
+Two facts. In the linear region a live HTML texture costs about **a quarter to a
+third of a millisecond of frame time per surface** — ten in view is ~3 ms, 75 → ~62
+fps. From roughly sixty surfaces up the loaded rate **pins at ~30 fps regardless of
+N**: 60, 160 and 200 all land within 2 fps of each other. That is a throttle
+somewhere between the browsers and the readback, not a cheap tail — the per-car
+figure falls because the ceiling stopped moving, and each browser is presumably
+painting less often. All N displays reported live in every run. Memory per
+instance was not measured.
+
 Two routes were researched but not spiked, for when a live Chromium per
 surface is too much: the 2.22 **extension texture source**
 (`#(rgb,w,h,1)extension("name","unique",0)` → `RVExtensionFillTextureSource`
