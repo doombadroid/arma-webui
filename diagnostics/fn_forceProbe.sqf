@@ -81,11 +81,13 @@ removeMissionEventHandler ["EachFrame", _mh];
 // baseline was then published in FINDINGS section 1 as a measured negative for
 // the lever. Same false-negative class as phase 3's _this/_thisArgs bug.
 //
-// There is no UI-on-texture path anywhere in this repo, so rather than pretend,
-// say the phase does not apply here.
+// This probe runs against an ordinary dialog, where the lever does not apply, so
+// say so. It HAS now been measured where it does apply: examples/ui2texture/ hosts
+// a browser inside a ui2texture display, and there displayUpdate is the whole
+// mechanism -- one browser paint per game frame (FINDINGS section 12).
 private _isUiOnTexture = false;   // no ui2texture host exists in this library
 if (!_isUiOnTexture) then {
-    diag_log "[WEBUI-FORCE] 4 EachFrame displayUpdate: NOT APPLICABLE -- displayUpdate only drives a UI-on-texture display, and this control's parent is an ordinary dialog/RscTitles display. Sampling it would report an idle baseline as a negative result. Re-run inside a ui2texture host if you need this lever measured.";
+    diag_log "[WEBUI-FORCE] 4 EachFrame displayUpdate: NOT APPLICABLE -- displayUpdate only drives a UI-on-texture display, and this control's parent is an ordinary dialog/RscTitles display. Sampling it would report an idle baseline as a negative result. Measured inside a ui2texture host in examples/ui2texture -- see FINDINGS section 12.";
 } else {
     private _mh2 = addMissionEventHandler ["EachFrame", { displayUpdate (_thisArgs select 0); }, [_disp]];
     [_ctrl, "4 EachFrame displayUpdate", 5] call webui_fnc_countDraws;

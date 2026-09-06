@@ -125,6 +125,9 @@ several things that are not what they appear:
 - The browser costs no measurable frame rate.
 - The CSS viewport is 30 px per `UI_GRID` unit, independent of screen resolution.
 - `ExecJS` carries at least 3.8 MB per call.
+- **A browser inside a UI-on-texture display paints at frame rate** — HTML on a
+  3D model, one Chromium paint per game frame. Recipe and laws in §12, runnable
+  probe in [`examples/ui2texture/`](examples/ui2texture/).
 
 ## Page rules
 

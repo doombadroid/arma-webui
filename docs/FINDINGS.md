@@ -40,7 +40,8 @@ library documents it -- inside a dialog's `class controls`, or an RscTitles
 overlay -- has an ordinary parent display, so the pump issued a draw request
 against nothing and the phase resampled an idle control. `webui_fnc_forceProbe`
 now reports that phase as NOT APPLICABLE rather than printing a baseline as a
-result. Treat this lever as **unmeasured outside a ui2texture host**.
+result. Inside a ui2texture host it is the whole mechanism — measured in **§12**: one
+browser paint per game frame, driven by nothing but this call.
 
 **`EachFrame ctrlCommit` was never actually measured**, on either client. That
 phase of `webui_fnc_forceProbe` read its arguments off `_this`, but `EachFrame`
@@ -447,3 +448,71 @@ is the only path that always works — which is why INSTALL.md step 6 is
 mandatory rather than an optimisation, and why the injector should be treated
 as a net, not a mechanism.
 
+## 12. A browser inside a UI-on-texture display paints at frame rate
+
+**Measured 2026-09-06, Arma 2.22.154049, launched through Steam** (so §1's
+healthy world), on a `C_Hatchback_01_F` with one hidden selection.
+
+The engine can render a *display* into a texture and hand that texture to
+`setObjectTexture` — the "UI On Texture" procedural source, 2.12/2.14
+(`Procedural Textures` on the wiki). Put a `CT_WEBBROWSER` in that display and
+the page is on the model. BI's own `CT_WEBBROWSER` page describes the
+combination ("inside a ui2texture containing a browser…"); nobody had reported
+running it. It runs:
+
+```sqf
+_veh setObjectTexture [0, "#(rgb,1024,1024,1)uiEx(display:webui_uiTexDemo,uniqueName:demo_4_88,bgColor:#000000ff)"];
+addMissionEventHandler ["EachFrame", { displayUpdate (findDisplay "demo_4_88") }];
+```
+
+| event | frame | delta |
+|---|---|---|
+| string applied | 8645 | — |
+| ui2texture display exists (`findDisplay` non-null) | 8645 | 0 |
+| browser `Draw` #1 | 8699 | +54 |
+| browser `Draw` #60 | 8758 | +59 |
+| browser `Draw` #600 | 9298 | +540 |
+
+600 paints in 653 frames, the first 54 being page load: **one Chromium paint per
+game frame** once the page is up. An animated canvas on the car runs at the
+game's rate. `examples/ui2texture/` is the exact probe.
+
+What the run pinned down, beyond "it works":
+
+- **The display is created by the first texture draw, not by script.**
+  `findDisplay "<uniquename>"` is null until the engine has needed the texture
+  once. Poll for it (an `EachFrame` that tolerates null does); do not wait on
+  it synchronously. Unique names are forced lowercase.
+- **Without `displayUpdate` it renders once and freezes.** The pump *is* the
+  feature. Stop the pump and the last frame stays — which is how a static sign
+  can be rendered once and cost nothing after.
+- **Preload the display once or the first use fails** with "Cannot load
+  mipmap" (feedback T171035 / T170766). `createDisplay` then `closeDisplay 1`,
+  once per session, before the first string is applied. Lifted from Advanced
+  Equipment's shipped code, which ships ui2texture on every laptop.
+- **The engine drops the display when nothing references it.** After
+  `setObjectTexture [i, "#reset"]` (2.20+), `findDisplay` was already null.
+  Cleanup is free; do not hold a handle across a reset.
+- **`setObjectTexture` is local; `…Global` broadcasts the string.** Every
+  client then instantiates its own display and its own browser. A probe should
+  stay local. A shipped feature going global must budget one Chromium per
+  client per live surface, and every client needs the display class and the
+  page (both come with the mission).
+- **The display is rendered in its own 0..1 space, square.** Author the
+  display with `x=0;y=0;w=1;h=1`, not safezone — safezone maths pushes the
+  page off the texture. `uiEx` renders 1:1 regardless of texture shape
+  (feedback T170754, secondary source), so a 1024×2048 texture squashes the
+  page; use `viewportW/H` or design for the stretch.
+- **Only classes with `hiddenSelections` take it.** `getObjectTextures obj`
+  returning `[]` means never. In particular `createSimpleObject [<p3d path>,…]`
+  objects "cannot be textured" and "addAction does not work" on them (wiki,
+  `createSimpleObject`); the class-name syntax can be textured.
+
+Two routes were researched but not spiked, for when a live Chromium per
+surface is too much: the 2.22 **extension texture source**
+(`#(rgb,w,h,1)extension("name","unique",0)` → `RVExtensionFillTextureSource`
+fills a CPU buffer on a texture-loading thread; pixel format codes are still a
+TODO on the wiki), and rendering the page once to a canvas, shipping the PNG
+through the bridge to an extension that writes a file, and pointing
+`setObjectTexture` at the absolute path (documented to work; unique filenames,
+because the engine caches by path).

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>matrix rain</title>
+<!--
+  Proof of concept for ui2texture (owner 2026-09-06): this page is never shown in a dialog.
+  It is the content of display AP_uiTexMatrix (dialog\uitex_matrix.hpp), which the engine
+  renders into a procedural texture that AP_fnc_uiTexMatrix paints onto a car's hidden
+  selections. Everything inline: the browser sandbox forbids fetch, fonts and external files.
+  It does not need to look good -- it needs to move, so the question "does a browser paint
+  inside a UI-on-texture display on this client" has a visible answer.
+-->
+<style>
+  html, body { margin: 0; background: #000; width: 100%; height: 100%; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c" width="512" height="512"></canvas>
+<script>
+(function () {
+  var cv = document.getElementById("c"), ctx = cv.getContext("2d");
+  var W = cv.width, H = cv.height, FS = 16, cols = Math.floor(W / FS);
+  var drops = [], glyphs = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉ0123456789ABCXYZ";
+  for (var i = 0; i < cols; i++) drops[i] = Math.floor(Math.random() * H / FS);
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+  var frame = 0;
+  function tick() {
+    ctx.fillStyle = "rgba(0,0,0,0.08)"; ctx.fillRect(0, 0, W, H);
+    ctx.font = FS + "px monospace";
+    for (var i = 0; i < cols; i++) {
+      var ch = glyphs[Math.floor(Math.random() * glyphs.length)];
+      ctx.fillStyle = (Math.random() < 0.1) ? "#cfffd8" : "#00ff41";
+      ctx.fillText(ch, i * FS, drops[i] * FS);
+      if (drops[i] * FS > H && Math.random() > 0.975) drops[i] = 0;
+      drops[i]++;
+    }
+    // A frame counter in the corner: if this number is climbing on the car, the whole chain
+    // (browser -> display -> texture -> selection) is live, not a single stuck frame.
+    frame++;
+    ctx.fillStyle = "#000"; ctx.fillRect(0, H - 22, 120, 22);
+    ctx.fillStyle = "#ffffff"; ctx.fillText("f " + frame, 4, H - 6);
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
