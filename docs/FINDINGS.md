@@ -595,6 +595,14 @@ browser per viewer. Deflate on the wire makes a base64 JPEG *larger* (74 625 -> 
 bytes); ship these raw. Getting the image out of a `.paa` is a tool job; the page maker
 takes PNG/JPEG.
 
+**Resolution and texture type, from the side-by-side.** At `#(rgb,512,512,1)` a streamed
+livery reads soft next to a stock 2048 sheet; a static skin should render at the sheet's
+own size (2048 -- painted once, memory not frame time), a live one at 1024 (2048 is
+sixteen times the per-frame readback of 512). And `uiEx` defaults `texType` to `ca`: an
+alpha texture, which puts a car body through the alpha-blended path and reads darker and
+less reflective than the stock paint. Say `texType:co` for a livery. With both, the owner's
+verdict against the original was "close enough"; the remainder is JPEG versus DXT.
+
 ### Two detours worth not repeating
 
 - **Do not inflate a copy of the model to make a texture "float".** A scaled
