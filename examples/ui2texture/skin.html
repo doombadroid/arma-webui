@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>skin</title>
+<!--
+  PLACEHOLDER for a server-streamed HTML skin (2026-09-06). This is the page display
+  webui_uiTexSkin points at, because a CT_WEBBROWSER's url= must be inside allowedHTMLLoadURIs, i.e.
+  inside the mission. It paints nothing but black and boots webui.js; the ACTUAL skin arrives from
+  the server as a whole document through webui_fnc_serve (WEBUI._serve -> document.write) --
+  <server page root>/skins/<id>.html, a JPEG data URI stretched over the page. The
+  mission PBO never carries a skin; the server does, and streams it to whoever needs it.
+-->
+<style>html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden}</style>
+</head>
+<body>
+<script>
+(function () {
+  if (typeof A3API !== "undefined" && A3API.RequestFile) {
+    A3API.RequestFile("webui\\ui\\webui.js")
+      .then(function (src) { try { (0, eval)(src); } catch (e) { window.__apBootErr = "eval: " + e; } })
+      .catch(function (e) { window.__apBootErr = "RequestFile: " + e; });
+  }
+})();
+</script>
+</body>
+</html>

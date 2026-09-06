@@ -531,6 +531,62 @@ figure falls because the ceiling stopped moving, and each browser is presumably
 painting less often. All N displays reported live in every run. Memory per
 instance was not measured.
 
+### Clothing, JIP, and the registration race (measured 2026-09-06)
+
+**Uniforms and backpacks take it; vests, headgear and goggles cannot.** A texture goes
+on a hidden selection, and on a person the vanilla models carry one on the uniform
+(selection 0) and on the backpack (its own object). Nothing else on the body has one,
+and no command retextures a vest (the wiki's own note). `examples/ui2texture/fn_wearPage.sqf`
+paints uniform + backpack from one display -- one browser per viewer for both. The
+uniform's UV sheet is a patchwork, so an unaware page is chopped across the body.
+Changing uniform, respawning or opening the Arsenal resets the texture; re-apply where
+your clothing skins already re-apply.
+
+**The string is global and JIP-safe; the pump is per viewer.** `setObjectTextureGlobal`
+with a `uiEx(...)` string replicates like any texture and the engine keeps it for late
+joiners. Every client that draws the object then owns a display and a browser -- and
+nothing in the string can call `displayUpdate` on them. So an ANIMATED surface needs
+a per-viewer half: `remoteExec` a registration (`jip = 1`, one key per object) into a
+manager that pumps it. A STATIC surface needs a per-viewer serve once and no pump at all.
+
+**The display is created by the first draw, seconds after the string is applied.** The
+first manager pruned any registration whose `findDisplay` was null -- which is every
+registration, for at least a frame and typically a second -- so no surface was ever
+pumped and each froze on its black first frame. The symptom was "just black, no
+animation" with a clean log: texture applied, registered, `UI2Tex creating new display`
+one second later. Prune on a null OBJECT only; treat a missing display as "not drawn
+yet" and pump it the frame it exists. Same rule for a freeze: gate it on TIME after the
+first paint, never on a paint count -- a static page paints once or twice and a count
+of thirty never arrives.
+
+### Server-streamed static skins (measured 2026-09-06)
+
+The art never enters the mission PBO. `fn_htmlSkin` broadcasts
+`uiEx(display:webui_uiTexSkin,uniqueName:apskin_<id>)`; the display's own page is a
+black placeholder that boots `webui.js`; on each viewer `fn_htmlSkinClient` waits for
+the display, `webui_fnc_init`s its browser, and `webui_fnc_serve`s `skins/<id>.html`
+from the server -- a 512 px JPEG data URI over the document, ~55 KB, ~75 KB as a page.
+Then it paints once, freezes and stops the browser.
+
+Measured: first paint **2 s after apply**; the display reported alive every minute for
+the length of the test; **the paint survived leaving and returning** at 500 m / 30 s and
+across the map / 3 min. One display per SKIN, so every object wearing it shares one
+browser per viewer. Deflate on the wire makes a base64 JPEG *larger* (74 625 -> 75 296
+bytes); ship these raw. Getting the image out of a `.paa` is a tool job; the page maker
+takes PNG/JPEG.
+
+### Two detours worth not repeating
+
+- **Do not inflate a copy of the model to make a texture "float".** A scaled
+  class-name simple copy does float (`getObjectScale` read 1.1; `boundingBoxReal` does
+  NOT move with render scale and was the wrong meter), but a second body chasing the
+  first fights the vehicle in motion, and `damagehide` -- a selection name that looks
+  like wreck detail -- holds a BI car's entire undamaged body: hide it and the shell is
+  invisible with every log line green. What "3D from HTML" can be on a flat selection is
+  view-dependent parallax from a camera vector the page is pushed each frame.
+- **Name a texture source the way `BIS_fnc_initVehicle` reads it.** A bare string is a
+  VARIANT class; it returned `true` and changed nothing. `["Red", 1]` is a texture source.
+
 Two routes were researched but not spiked, for when a live Chromium per
 surface is too much: the 2.22 **extension texture source**
 (`#(rgb,w,h,1)extension("name","unique",0)` → `RVExtensionFillTextureSource`
